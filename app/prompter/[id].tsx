@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -23,37 +23,69 @@ const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const READING_LINE_Y = SCREEN_HEIGHT * 0.42;
 
 export default function PrompterScreen() {
-  const { id, fontSize, baselineWPS } = useLocalSearchParams<{
+  const { id, fontSize } = useLocalSearchParams<{
     id: string;
     fontSize: string;
     baselineWPS: string;
   }>();
 
   const parsedFontSize = parseInt(fontSize ?? '48', 10);
-  const parsedWPS = parseFloat(baselineWPS ?? '2.5');
 
   const getScript = useScriptsStore((s) => s.getScript);
   const script = getScript(id);
 
-  const { isPaused, scrollPosition, currentWPS, isListening, pause, resume } =
+  const { isPaused, scrollPosition, currentWordIndex, isListening, pause, resume } =
     usePrompterStore();
 
-  const { startSession, stopSession } = usePrompterEngine(parsedFontSize, parsedWPS);
+  const { startSession, stopSession, engine, words } = usePrompterEngine(
+    script?.content ?? ''
+  );
   useKeepAwake(isListening);
 
   const scrollRef = useRef<ScrollView>(null);
-  const translateY = useSharedValue(0);
+  // Y position per word index (relative to scroll content)
+  const wordPositionsRef = useRef<number[]>([]);
+  const [, forceUpdate] = useState(0);
 
-  // Start session on mount
+  // Mulai session on mount
   useEffect(() => {
     startSession().catch(console.error);
     return () => stopSession();
   }, []);
 
-  // Sync scroll position to the ScrollView
+  // Sync scroll position dari engine ke ScrollView
   useEffect(() => {
     scrollRef.current?.scrollTo({ y: scrollPosition, animated: false });
   }, [scrollPosition]);
+
+  // Pas currentWordIndex berubah, hitung target scroll Y dari posisi kata
+  // Target: posisi kata berikutnya (currentWordIndex+1) ada di reading line.
+  // Kalau gak ada (akhir script), pakai kata terakhir.
+  useEffect(() => {
+    if (currentWordIndex < 0) {
+      engine.setTargetPosition(0);
+      return;
+    }
+    const positions = wordPositionsRef.current;
+    if (positions.length === 0) return;
+
+    // Look ahead 1 kata supaya user baca kata yang HIGHLIGHTED, scroll lead
+    const targetIdx = Math.min(currentWordIndex + 1, positions.length - 1);
+    const y = positions[targetIdx];
+    if (typeof y === 'number') {
+      engine.setTargetPosition(y);
+    }
+  }, [currentWordIndex, engine]);
+
+  const recordWordPosition = useCallback((idx: number, y: number) => {
+    const arr = wordPositionsRef.current;
+    if (arr[idx] === y) return;
+    arr[idx] = y;
+    // Trigger re-evaluate target kalau kata yang lagi di-target ke-update layoutnya
+    if (idx === currentWordIndex || idx === currentWordIndex + 1) {
+      forceUpdate((n) => n + 1);
+    }
+  }, [currentWordIndex]);
 
   const handleStop = () => {
     stopSession();
@@ -64,6 +96,8 @@ export default function PrompterScreen() {
     opacity: withTiming(isListening && !isPaused ? 1 : 0.3, { duration: 300 }),
     transform: [{ scale: withTiming(isListening && !isPaused ? 1.1 : 1, { duration: 300 }) }],
   }));
+
+  const lineHeight = useMemo(() => parsedFontSize * 1.5, [parsedFontSize]);
 
   if (!script) {
     return (
@@ -86,19 +120,39 @@ export default function PrompterScreen() {
           { paddingTop: READING_LINE_Y },
         ]}
       >
-        <Text
-          style={[styles.scriptText, { fontSize: parsedFontSize, lineHeight: parsedFontSize * 1.5 }]}
-        >
-          {script.content}
-        </Text>
-        {/* Bottom padding so last line can scroll to reading line */}
+        {/* Render kata-kata dalam flex-wrap row, tiap kata punya onLayout
+            buat track Y position-nya */}
+        <View style={styles.wordsContainer}>
+          {words.map((word, i) => {
+            const isSpoken = i < currentWordIndex;
+            const isCurrent = i === currentWordIndex;
+            return (
+              <View
+                key={i}
+                onLayout={(e) => recordWordPosition(i, e.nativeEvent.layout.y)}
+              >
+                <Text
+                  style={[
+                    styles.scriptText,
+                    { fontSize: parsedFontSize, lineHeight },
+                    isCurrent && styles.currentWord,
+                    isSpoken && styles.spokenWord,
+                  ]}
+                >
+                  {word.original + ' '}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+        {/* Bottom padding so last word can scroll to reading line */}
         <View style={{ height: SCREEN_HEIGHT - READING_LINE_Y }} />
       </ScrollView>
 
       {/* Reading line */}
       <View style={[styles.readingLine, { top: READING_LINE_Y }]} pointerEvents="none" />
 
-      {/* Gradient overlay top */}
+      {/* Gradient overlay top — dim teks yang udah diucapin */}
       <View style={styles.topGradient} pointerEvents="none" />
 
       {/* Controls */}
@@ -124,7 +178,7 @@ export default function PrompterScreen() {
       {__DEV__ && (
         <View style={styles.hud}>
           <Text style={styles.hudText}>
-            {currentWPS.toFixed(1)} WPS · {Math.round(scrollPosition)}px
+            word {currentWordIndex + 1}/{words.length} · {Math.round(scrollPosition)}px
             {isPaused ? ' · PAUSED' : ''}
           </Text>
         </View>
@@ -137,9 +191,23 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000000' },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingBottom: 0 },
+  wordsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-end',
+  },
   scriptText: {
     color: colors.text,
     fontWeight: '400',
+  },
+  // Kata yang udah diucapin: dim (kayak karaoke "lewat")
+  spokenWord: {
+    color: colors.textDim,
+  },
+  // Kata yang lagi diucapin: highlight terang
+  currentWord: {
+    color: colors.primary,
+    fontWeight: '600',
   },
   readingLine: {
     position: 'absolute',

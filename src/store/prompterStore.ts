@@ -6,6 +6,7 @@ interface PrompterState {
   scrollPosition: number;
   scrollSpeed: number;
   currentWPS: number;
+  currentWordIndex: number; // karaoke: index kata terakhir yg di-match. -1 = belum mulai
   isPaused: boolean;
   isListening: boolean;
   detectedLanguage: string;
@@ -16,6 +17,7 @@ interface PrompterState {
   setScrollSpeed: (speed: number) => void;
   setScrollPosition: (pos: number) => void;
   setWPS: (wps: number) => void;
+  setCurrentWordIndex: (idx: number) => void;
   pause: () => void;
   resume: () => void;
   setListening: (v: boolean) => void;
@@ -30,6 +32,7 @@ const initialState = {
   scrollPosition: 0,
   scrollSpeed: 0,
   currentWPS: 0,
+  currentWordIndex: -1,
   isPaused: false,
   isListening: false,
   detectedLanguage: 'id-ID',
@@ -44,6 +47,7 @@ export const usePrompterStore = create<PrompterState>()((set) => ({
   setScrollSpeed: (speed) => set({ scrollSpeed: speed }),
   setScrollPosition: (pos) => set({ scrollPosition: pos }),
   setWPS: (wps) => set({ currentWPS: wps }),
+  setCurrentWordIndex: (idx) => set({ currentWordIndex: idx }),
   pause: () => set({ isPaused: true }),
   resume: () => set({ isPaused: false }),
   setListening: (v) => set({ isListening: v }),
