@@ -57,7 +57,9 @@ export class ScrollEngine {
 
   subscribe(cb: PositionCallback): () => void {
     this.subscribers.add(cb);
-    return () => this.subscribers.delete(cb);
+    return () => {
+      this.subscribers.delete(cb);
+    };
   }
 
   private notifySubscribers(): void {

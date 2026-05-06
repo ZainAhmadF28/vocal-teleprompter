@@ -1,4 +1,15 @@
-import { requireNativeModule } from 'expo-modules-core';
+import {
+  requireNativeModule,
+  type EventSubscription,
+} from 'expo-modules-core';
+
+export type OverlayControlAction =
+  | 'togglePause'
+  | 'restart'
+  | 'close'
+  | 'toggleMode'
+  | 'slower'
+  | 'faster';
 
 export interface OverlayConfig {
   text: string;
@@ -8,12 +19,14 @@ export interface OverlayConfig {
   position: { x: number; y: number };
   size: { width: number; height: number };
   opacity: number;
+  scrollMode?: 'voice' | 'auto';
+  isPaused?: boolean;
+  speedLabel?: string;
 }
 
 export interface OverlayEvents {
-  pausePressed: () => void;
-  resumePressed: () => void;
-  closePressed: () => void;
+  [eventName: string]: (...args: any[]) => void;
+  controlPressed: (event: { action: OverlayControlAction }) => void;
   positionChanged: (pos: { x: number; y: number }) => void;
   sizeChanged: (size: { width: number; height: number }) => void;
 }
@@ -31,12 +44,23 @@ interface NativeOverlayModule {
     y: number;
     width: number;
     height: number;
+    scrollMode: 'voice' | 'auto';
+    isPaused: boolean;
+    speedLabel: string;
   }): Promise<void>;
   hide(): void;
   setText(text: string): void;
   setScrollPosition(y: number): void;
+  setCurrentWordIndex(index: number): void;
+  setPaused(paused: boolean): void;
+  setScrollMode(mode: 'voice' | 'auto'): void;
+  setSpeedLabel(label: string): void;
   setOpacity(opacity: number): void;
   isShown(): Promise<boolean>;
+  addListener<K extends keyof OverlayEvents>(
+    event: K,
+    handler: OverlayEvents[K]
+  ): EventSubscription;
 }
 
 let Native: NativeOverlayModule | null = null;
@@ -71,6 +95,9 @@ const TeleprompterOverlay = {
       y: config.position.y,
       width: config.size.width,
       height: config.size.height,
+      scrollMode: config.scrollMode ?? 'voice',
+      isPaused: config.isPaused ?? false,
+      speedLabel: config.speedLabel ?? '140',
     });
   },
   async hide(): Promise<void> {
@@ -85,6 +112,22 @@ const TeleprompterOverlay = {
     if (!Native) return;
     Native.setScrollPosition(y);
   },
+  setCurrentWordIndex(index: number): void {
+    if (!Native) return;
+    Native.setCurrentWordIndex(index);
+  },
+  setPaused(paused: boolean): void {
+    if (!Native) return;
+    Native.setPaused(paused);
+  },
+  setScrollMode(mode: 'voice' | 'auto'): void {
+    if (!Native) return;
+    Native.setScrollMode(mode);
+  },
+  setSpeedLabel(label: string): void {
+    if (!Native) return;
+    Native.setSpeedLabel(label);
+  },
   setOpacity(opacity: number): void {
     if (!Native) return;
     Native.setOpacity(opacity);
@@ -93,12 +136,12 @@ const TeleprompterOverlay = {
     if (!Native) return false;
     return Native.isShown();
   },
-  // Event subscriptions reserved for next iteration (Sprint 4 polish)
   addListener<K extends keyof OverlayEvents>(
-    _event: K,
-    _handler: OverlayEvents[K]
-  ): { remove: () => void } {
-    return { remove: () => {} };
+    event: K,
+    handler: OverlayEvents[K]
+  ): EventSubscription {
+    if (!Native) return { remove: () => {} };
+    return Native.addListener(event, handler);
   },
 };
 

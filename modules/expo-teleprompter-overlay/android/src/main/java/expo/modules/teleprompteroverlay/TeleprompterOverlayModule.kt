@@ -9,17 +9,35 @@ import android.os.Looper
 import android.provider.Settings
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import kotlin.math.roundToInt
 
 class TeleprompterOverlayModule : Module() {
 
   private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
   private val overlayManager by lazy {
-    OverlayManager(appContext.reactContext ?: throw IllegalStateException("No context"))
+    OverlayManager(
+      appContext.reactContext ?: throw IllegalStateException("No context"),
+      onControlPressed = { action ->
+        sendEvent("controlPressed", mapOf("action" to action))
+      },
+      onPositionChanged = { x, y ->
+        sendEvent("positionChanged", mapOf("x" to x, "y" to y))
+      },
+      onSizeChanged = { width, height ->
+        sendEvent("sizeChanged", mapOf("width" to width, "height" to height))
+      }
+    )
   }
 
   override fun definition() = ModuleDefinition {
     Name("ExpoTeleprompterOverlay")
+
+    Events(
+      "controlPressed",
+      "positionChanged",
+      "sizeChanged"
+    )
 
     AsyncFunction("hasPermission") { ->
       val ctx = appContext.reactContext ?: return@AsyncFunction false
@@ -53,15 +71,20 @@ class TeleprompterOverlayModule : Module() {
     }
 
     AsyncFunction("show") { config: Map<String, Any?> ->
+      val ctx = appContext.reactContext ?: return@AsyncFunction
       val text = config["text"] as? String ?: ""
       val fontSize = (config["fontSize"] as? Number)?.toFloat() ?: 18f
       val fontColor = parseColor(config["fontColor"] as? String, Color.WHITE)
       val backgroundColor = parseColor(config["backgroundColor"] as? String, Color.BLACK)
       val opacity = (config["opacity"] as? Number)?.toFloat() ?: 0.85f
-      val posX = (config["x"] as? Number)?.toInt() ?: 100
-      val posY = (config["y"] as? Number)?.toInt() ?: 200
-      val width = (config["width"] as? Number)?.toInt() ?: 800
-      val height = (config["height"] as? Number)?.toInt() ?: 400
+      val density = ctx.resources.displayMetrics.density
+      val posX = dpToPx((config["x"] as? Number)?.toFloat() ?: 100f, density)
+      val posY = dpToPx((config["y"] as? Number)?.toFloat() ?: 200f, density)
+      val width = dpToPx((config["width"] as? Number)?.toFloat() ?: 420f, density)
+      val height = dpToPx((config["height"] as? Number)?.toFloat() ?: 300f, density)
+      val scrollMode = config["scrollMode"] as? String ?: "voice"
+      val isPaused = config["isPaused"] as? Boolean ?: false
+      val speedLabel = config["speedLabel"] as? String ?: "140"
 
       mainHandler.post {
         overlayManager.show(
@@ -73,7 +96,10 @@ class TeleprompterOverlayModule : Module() {
           posX = posX,
           posY = posY,
           width = width,
-          height = height
+          height = height,
+          initialScrollMode = scrollMode,
+          initialPaused = isPaused,
+          initialSpeedLabel = speedLabel
         )
       }
     }
@@ -88,6 +114,22 @@ class TeleprompterOverlayModule : Module() {
 
     Function("setScrollPosition") { y: Double ->
       mainHandler.post { overlayManager.setScrollPosition(y.toFloat()) }
+    }
+
+    Function("setCurrentWordIndex") { index: Int ->
+      mainHandler.post { overlayManager.setCurrentWordIndex(index) }
+    }
+
+    Function("setPaused") { paused: Boolean ->
+      mainHandler.post { overlayManager.setPaused(paused) }
+    }
+
+    Function("setScrollMode") { mode: String ->
+      mainHandler.post { overlayManager.setScrollMode(mode) }
+    }
+
+    Function("setSpeedLabel") { label: String ->
+      mainHandler.post { overlayManager.setSpeedLabel(label) }
     }
 
     Function("setOpacity") { opacity: Double ->
@@ -110,5 +152,9 @@ class TeleprompterOverlayModule : Module() {
     } catch (_: Exception) {
       fallback
     }
+  }
+
+  private fun dpToPx(dp: Float, density: Float): Int {
+    return (dp * density).roundToInt()
   }
 }

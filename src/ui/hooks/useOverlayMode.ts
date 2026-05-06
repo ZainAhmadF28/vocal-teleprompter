@@ -26,6 +26,9 @@ export function useOverlayMode() {
       position: { x: 100, y: 200 },
       size: settings.overlayDefaultSize,
       opacity: settings.overlayOpacity,
+      scrollMode: settings.scrollMode,
+      isPaused: false,
+      speedLabel: String(settings.scrollWPM),
     });
 
     setMode('overlay');
@@ -34,16 +37,33 @@ export function useOverlayMode() {
 
   useEffect(() => {
     const subs = [
-      Overlay.addListener('pausePressed', pause),
-      Overlay.addListener('resumePressed', resume),
-      Overlay.addListener('closePressed', () => {
-        Overlay.hide();
-        setMode('idle');
+      Overlay.addListener('controlPressed', (event) => {
+        switch (event.action) {
+          case 'togglePause':
+            usePrompterStore.getState().isPaused ? resume() : pause();
+            break;
+          case 'close':
+            Overlay.hide();
+            setMode('idle');
+            break;
+          case 'toggleMode':
+            settings.setScrollMode(settings.scrollMode === 'auto' ? 'voice' : 'auto');
+            break;
+          case 'slower':
+            settings.setScrollWPM(Math.max(60, settings.scrollWPM - 10));
+            break;
+          case 'faster':
+            settings.setScrollWPM(Math.min(250, settings.scrollWPM + 10));
+            break;
+          case 'restart':
+          default:
+            break;
+        }
       }),
     ];
 
     return () => subs.forEach((s) => s.remove());
-  }, [pause, resume, setMode]);
+  }, [pause, resume, setMode, settings]);
 
   // Subscribe to scroll position and push to overlay
   useEffect(() => {

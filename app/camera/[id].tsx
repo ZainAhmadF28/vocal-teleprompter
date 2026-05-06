@@ -21,11 +21,18 @@ import {
   RotateCw,
   Mic,
   MicOff,
-  Image as ImageIcon,
   Camera as CameraIcon,
+  Pause,
+  Play,
+  Gauge,
+  Minus,
+  Plus,
+  RefreshCw,
+  Voicemail,
 } from 'lucide-react-native';
 import { useScriptsStore } from '@/store/scriptsStore';
 import { usePrompterStore } from '@/store/prompterStore';
+import { useSettingsStore } from '@/store/settingsStore';
 import { usePrompterEngine } from '@/ui/hooks/usePrompterEngine';
 import { useKeepAwake } from '@/ui/hooks/useKeepAwake';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -74,10 +81,15 @@ function PermissionGate({
 }
 
 export default function CameraStudioScreen() {
-  const { id } = useLocalSearchParams<{ id: string; fontSize?: string }>();
+  const { id, fontSize: fontSizeParam } = useLocalSearchParams<{ id: string; fontSize?: string }>();
   const { colors, typography, spacing, radius } = useTheme();
+  const settings = useSettingsStore();
 
-  const fontSize = 24; // smaller for overlay panel
+  const requestedFontSize = parseInt(fontSizeParam ?? '48', 10);
+  const fontSize = Math.max(
+    18,
+    Math.min(34, Math.round((Number.isNaN(requestedFontSize) ? 48 : requestedFontSize) * 0.5))
+  );
   const getScript = useScriptsStore((s) => s.getScript);
   const script = getScript(id);
 
@@ -103,7 +115,7 @@ export default function CameraStudioScreen() {
     pause,
     resume,
   } = usePrompterStore();
-  const { startSession, stopSession, engine, words } = usePrompterEngine(
+  const { startSession, stopSession, restartSession, seekToWord, engine, words } = usePrompterEngine(
     script?.content ?? ''
   );
 
@@ -120,7 +132,9 @@ export default function CameraStudioScreen() {
 
   // Update scroll position for prompter overlay (using inner ScrollView)
   const overlayScrollRef = useRef<ScrollView | null>(null);
+  const overlayUserScrollingRef = useRef(false);
   useEffect(() => {
+    if (overlayUserScrollingRef.current) return;
     overlayScrollRef.current?.scrollTo({ y: scrollPosition, animated: false });
   }, [scrollPosition]);
 
@@ -150,6 +164,33 @@ export default function CameraStudioScreen() {
     },
     [currentWordIndex]
   );
+
+  const handleOverlayScrollEnd = (e: any) => {
+    if (!isPaused) return;
+    overlayUserScrollingRef.current = false;
+    const y = e.nativeEvent.contentOffset.y;
+    const positions = wordPositionsRef.current;
+    if (positions.length === 0) return;
+
+    let bestIdx = 0;
+    let bestDiff = Infinity;
+    for (let i = 0; i < positions.length; i++) {
+      const p = positions[i];
+      if (typeof p !== 'number') continue;
+      const diff = Math.abs(p - y);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIdx = i;
+      }
+    }
+
+    seekToWord(bestIdx);
+    engine.seekTo(y);
+  };
+
+  const changeWPM = (delta: number) => {
+    settings.setScrollWPM(Math.max(60, Math.min(250, settings.scrollWPM + delta)));
+  };
 
   const handleStartRecording = async () => {
     if (!cameraRef.current || !isCameraReady || isRecording) return;
@@ -234,6 +275,8 @@ export default function CameraStudioScreen() {
   };
 
   const lineHeight = useMemo(() => fontSize * 1.5, [fontSize]);
+  const overlayPanelHeight = SCREEN_HEIGHT * 0.45;
+  const overlayReadingLineY = overlayPanelHeight * 0.4;
 
   if (!script) {
     return (
@@ -273,6 +316,7 @@ export default function CameraStudioScreen() {
         style={{ flex: 1 }}
         facing={facing}
         mode="video"
+        mute={!micEnabled}
         onCameraReady={() => setIsCameraReady(true)}
       />
 
@@ -344,7 +388,7 @@ export default function CameraStudioScreen() {
           top: SCREEN_HEIGHT * 0.12,
           left: spacing.lg,
           right: spacing.lg,
-          height: SCREEN_HEIGHT * 0.45,
+          height: overlayPanelHeight,
           backgroundColor: 'rgba(0,0,0,0.55)',
           borderRadius: radius.lg,
           borderWidth: 1,
@@ -370,11 +414,16 @@ export default function CameraStudioScreen() {
         </View>
         <ScrollView
           ref={overlayScrollRef}
-          scrollEnabled={false}
+          scrollEnabled={isPaused}
           showsVerticalScrollIndicator={false}
+          onScrollBeginDrag={() => {
+            if (isPaused) overlayUserScrollingRef.current = true;
+          }}
+          onMomentumScrollEnd={handleOverlayScrollEnd}
+          onScrollEndDrag={handleOverlayScrollEnd}
           contentContainerStyle={{
             paddingHorizontal: spacing.lg,
-            paddingTop: SCREEN_HEIGHT * 0.18,
+            paddingTop: overlayReadingLineY,
           }}
         >
           <View
@@ -411,14 +460,14 @@ export default function CameraStudioScreen() {
               );
             })}
           </View>
-          <View style={{ height: SCREEN_HEIGHT * 0.3 }} />
+          <View style={{ height: overlayPanelHeight - overlayReadingLineY }} />
         </ScrollView>
 
         {/* Reading line on overlay */}
         <View
           style={{
             position: 'absolute',
-            top: SCREEN_HEIGHT * 0.18 + spacing.xs,
+            top: overlayReadingLineY + spacing.xs,
             left: spacing.md,
             right: spacing.md,
             height: 1.5,
@@ -427,6 +476,108 @@ export default function CameraStudioScreen() {
           }}
           pointerEvents="none"
         />
+      </View>
+
+      {/* Prompter controls */}
+      <View
+        style={{
+          position: 'absolute',
+          bottom: 122,
+          left: spacing.lg,
+          right: spacing.lg,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: spacing.sm,
+          padding: spacing.sm,
+          borderRadius: radius.xl,
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.12)',
+        }}
+      >
+        <Pressable
+          onPress={() => settings.setScrollMode(settings.scrollMode === 'auto' ? 'voice' : 'auto')}
+          style={{
+            width: 48,
+            height: 44,
+            borderRadius: radius.pill,
+            backgroundColor:
+              settings.scrollMode === 'auto' ? colors.accent : 'rgba(255,255,255,0.1)',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {settings.scrollMode === 'auto' ? (
+            <Gauge size={19} color={colors.textInverse} strokeWidth={1.75} />
+          ) : (
+            <Voicemail size={19} color="#FFFFFF" strokeWidth={1.75} />
+          )}
+        </Pressable>
+
+        <Pressable
+          onPress={() => changeWPM(-10)}
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: radius.pill,
+            backgroundColor: 'rgba(255,255,255,0.1)',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Minus size={18} color="#FFFFFF" strokeWidth={1.75} />
+        </Pressable>
+
+        <Pressable
+          onPress={isPaused ? resume : pause}
+          style={({ pressed }) => [
+            {
+              width: 58,
+              height: 58,
+              borderRadius: radius.pill,
+              backgroundColor: colors.accent,
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: pressed ? 0.85 : 1,
+              transform: [{ scale: pressed ? 0.96 : 1 }],
+            },
+          ]}
+        >
+          {isPaused ? (
+            <Play size={24} color={colors.textInverse} strokeWidth={2} fill={colors.textInverse} />
+          ) : (
+            <Pause size={24} color={colors.textInverse} strokeWidth={2} fill={colors.textInverse} />
+          )}
+        </Pressable>
+
+        <Pressable
+          onPress={() => changeWPM(10)}
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: radius.pill,
+            backgroundColor: 'rgba(255,255,255,0.1)',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Plus size={18} color="#FFFFFF" strokeWidth={1.75} />
+        </Pressable>
+
+        <Pressable
+          onPress={restartSession}
+          style={{
+            width: 48,
+            height: 44,
+            borderRadius: radius.pill,
+            backgroundColor: 'rgba(255,255,255,0.1)',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <RefreshCw size={18} color="#FFFFFF" strokeWidth={1.75} />
+        </Pressable>
       </View>
 
       {/* Bottom controls bar */}

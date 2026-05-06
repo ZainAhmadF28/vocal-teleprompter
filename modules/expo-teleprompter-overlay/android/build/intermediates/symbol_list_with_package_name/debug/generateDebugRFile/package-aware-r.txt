@@ -1,1 +1,13 @@
 expo.modules.teleprompteroverlay
+drawable ic_overlay_close
+drawable ic_overlay_drag_handle
+drawable ic_overlay_gauge
+drawable ic_overlay_minus
+drawable ic_overlay_pause
+drawable ic_overlay_play
+drawable ic_overlay_plus
+drawable ic_overlay_resize_both
+drawable ic_overlay_resize_height
+drawable ic_overlay_resize_width
+drawable ic_overlay_restart
+drawable ic_overlay_voice

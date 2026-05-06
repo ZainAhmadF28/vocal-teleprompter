@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable, ScrollView, Alert, Modal } from 'react-native';
 import { router } from 'expo-router';
 import {
@@ -14,13 +14,110 @@ import {
 } from 'lucide-react-native';
 import { useTheme } from '@/theme/ThemeProvider';
 import { useSettingsStore } from '@/store/settingsStore';
+import { usePrompterStore } from '@/store/prompterStore';
 import { useScriptsStore, type Script } from '@/store/scriptsStore';
+import { usePrompterEngine } from '@/ui/hooks/usePrompterEngine';
 import { Screen } from '@/ui/components/Screen';
 import { Header } from '@/ui/components/Header';
 import { Card } from '@/ui/components/Card';
 import { Button } from '@/ui/components/Button';
 import { IconButton } from '@/ui/components/IconButton';
 import TeleprompterOverlay from '../../modules/expo-teleprompter-overlay/src/index';
+
+function FloatingOverlaySession({
+  script,
+  onClose,
+}: {
+  script: Script;
+  onClose: () => void;
+}) {
+  const scrollMode = useSettingsStore((s) => s.scrollMode);
+  const scrollWPM = useSettingsStore((s) => s.scrollWPM);
+  const setScrollMode = useSettingsStore((s) => s.setScrollMode);
+  const setScrollWPM = useSettingsStore((s) => s.setScrollWPM);
+  const setOverlayDefaultSize = useSettingsStore((s) => s.setOverlayDefaultSize);
+
+  const isPaused = usePrompterStore((s) => s.isPaused);
+  const currentWordIndex = usePrompterStore((s) => s.currentWordIndex);
+  const pause = usePrompterStore((s) => s.pause);
+  const resume = usePrompterStore((s) => s.resume);
+  const setMode = usePrompterStore((s) => s.setMode);
+  const setActiveScript = usePrompterStore((s) => s.setActiveScript);
+
+  const { startSession, stopSession, restartSession } = usePrompterEngine(script.content);
+
+  useEffect(() => {
+    setMode('overlay');
+    setActiveScript(script.id);
+    startSession().catch(console.error);
+    return () => {
+      stopSession();
+      setMode('idle');
+      setActiveScript(null);
+    };
+  }, [script.content, script.id, setActiveScript, setMode, startSession, stopSession]);
+
+  useEffect(() => {
+    TeleprompterOverlay.setCurrentWordIndex(currentWordIndex);
+  }, [currentWordIndex]);
+
+  useEffect(() => {
+    TeleprompterOverlay.setPaused(isPaused);
+  }, [isPaused]);
+
+  useEffect(() => {
+    TeleprompterOverlay.setScrollMode(scrollMode);
+    TeleprompterOverlay.setSpeedLabel(String(scrollWPM));
+  }, [scrollMode, scrollWPM]);
+
+  useEffect(() => {
+    const subs = [
+      TeleprompterOverlay.addListener('controlPressed', async (event) => {
+        switch (event.action) {
+          case 'togglePause':
+            usePrompterStore.getState().isPaused ? resume() : pause();
+            break;
+          case 'restart':
+            restartSession();
+            break;
+          case 'close':
+            await TeleprompterOverlay.hide();
+            onClose();
+            break;
+          case 'toggleMode':
+            setScrollMode(scrollMode === 'auto' ? 'voice' : 'auto');
+            break;
+          case 'slower':
+            setScrollWPM(Math.max(60, scrollWPM - 10));
+            break;
+          case 'faster':
+            setScrollWPM(Math.min(250, scrollWPM + 10));
+            break;
+        }
+      }),
+      TeleprompterOverlay.addListener('sizeChanged', (size) => {
+        setOverlayDefaultSize({
+          width: Math.max(260, Math.round(size.width)),
+          height: Math.max(170, Math.round(size.height)),
+        });
+      }),
+    ];
+
+    return () => subs.forEach((sub) => sub.remove());
+  }, [
+    onClose,
+    pause,
+    restartSession,
+    resume,
+    scrollMode,
+    scrollWPM,
+    setOverlayDefaultSize,
+    setScrollMode,
+    setScrollWPM,
+  ]);
+
+  return null;
+}
 
 function SegmentedControl<T extends string>({
   options,
@@ -168,9 +265,20 @@ export default function OverlayTab() {
   const scripts = useScriptsStore((s) => s.scripts);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [overlayActive, setOverlayActive] = useState(false);
+  const [activeScript, setActiveScript] = useState<Script | null>(null);
 
   return (
     <Screen>
+      {overlayActive && activeScript ? (
+        <FloatingOverlaySession
+          script={activeScript}
+          onClose={() => {
+            setOverlayActive(false);
+            setActiveScript(null);
+          }}
+        />
+      ) : null}
+
       <Header
         title="Overlay"
         right={
@@ -279,9 +387,9 @@ export default function OverlayTab() {
               }
               onChange={(v) => {
                 const sizeMap = {
-                  small: { width: 280, height: 160 },
-                  medium: { width: 400, height: 200 },
-                  large: { width: 560, height: 280 },
+                  small: { width: 320, height: 220 },
+                  medium: { width: 460, height: 320 },
+                  large: { width: 640, height: 440 },
                 };
                 settings.setOverlayDefaultSize(sizeMap[v]);
               }}
@@ -345,6 +453,7 @@ export default function OverlayTab() {
             onPress={async () => {
               await TeleprompterOverlay.hide();
               setOverlayActive(false);
+              setActiveScript(null);
             }}
           />
         ) : (
@@ -399,13 +508,20 @@ export default function OverlayTab() {
               fontColor: '#FFFFFF',
               backgroundColor: '#000000',
               opacity: settings.overlayOpacity,
-              position: { x: 60, y: 200 },
-              size: { width: sizeWidth * 2, height: sizeHeight * 2 },
+              position: { x: 24, y: 120 },
+              size: {
+                width: Math.max(320, sizeWidth),
+                height: Math.max(220, sizeHeight),
+              },
+              scrollMode: settings.scrollMode,
+              isPaused: usePrompterStore.getState().isPaused,
+              speedLabel: String(settings.scrollWPM),
             });
             setOverlayActive(true);
+            setActiveScript(script);
             Alert.alert(
               'Overlay Aktif',
-              'Bisa di-drag pakai jari. Kembali ke tab ini untuk hide.'
+              'Bisa di-drag dari handle/area teks. Tombol floating bisa pause, restart, mode, speed, dan close.'
             );
           } catch (e: any) {
             Alert.alert('Error', String(e?.message ?? e));

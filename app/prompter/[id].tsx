@@ -5,15 +5,17 @@ import {
   ScrollView,
   Dimensions,
   Pressable,
+  Modal,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import Animated, {
   useAnimatedStyle,
   withTiming,
 } from 'react-native-reanimated';
-import { X, Pause, Play, Gauge } from 'lucide-react-native';
+import { X, Pause, Play, Gauge, Minus, Plus, RotateCcw, Voicemail } from 'lucide-react-native';
 import { useScriptsStore } from '@/store/scriptsStore';
 import { usePrompterStore } from '@/store/prompterStore';
+import { useSettingsStore } from '@/store/settingsStore';
 import { usePrompterEngine } from '@/ui/hooks/usePrompterEngine';
 import { useKeepAwake } from '@/ui/hooks/useKeepAwake';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -29,6 +31,7 @@ export default function PrompterScreen() {
     baselineWPS: string;
   }>();
   const { colors, typography, spacing, radius } = useTheme();
+  const settings = useSettingsStore();
 
   const parsedFontSize = parseInt(fontSize ?? '48', 10);
 
@@ -38,7 +41,7 @@ export default function PrompterScreen() {
   const { isPaused, scrollPosition, currentWordIndex, isListening, pause, resume } =
     usePrompterStore();
 
-  const { startSession, stopSession, engine, seekToWord, words } = usePrompterEngine(
+  const { startSession, stopSession, restartSession, engine, seekToWord, words } = usePrompterEngine(
     script?.content ?? ''
   );
   useKeepAwake(isListening);
@@ -47,6 +50,7 @@ export default function PrompterScreen() {
   const wordPositionsRef = useRef<number[]>([]);
   const [, forceUpdate] = useState(0);
   const userScrollingRef = useRef(false);
+  const [speedPanelOpen, setSpeedPanelOpen] = useState(false);
 
   useEffect(() => {
     startSession().catch(console.error);
@@ -109,6 +113,10 @@ export default function PrompterScreen() {
   const handleStop = () => {
     stopSession();
     router.back();
+  };
+
+  const changeWPM = (delta: number) => {
+    settings.setScrollWPM(Math.max(60, Math.min(250, settings.scrollWPM + delta)));
   };
 
   const lineHeight = useMemo(() => parsedFontSize * 1.5, [parsedFontSize]);
@@ -271,20 +279,150 @@ export default function PrompterScreen() {
         </Pressable>
 
         <Animated.View style={animatedMicStyle}>
-          <View
-            style={{
-              width: 48,
-              height: 48,
-              borderRadius: radius.pill,
-              backgroundColor: 'rgba(255,255,255,0.08)',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+          <Pressable
+            onPress={() => setSpeedPanelOpen(true)}
+            style={({ pressed }) => [
+              {
+                minWidth: 56,
+                height: 48,
+                borderRadius: radius.pill,
+                backgroundColor: 'rgba(255,255,255,0.08)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingHorizontal: spacing.sm,
+                opacity: pressed ? 0.65 : 1,
+              },
+            ]}
           >
             <Gauge size={20} color="#FFFFFF" strokeWidth={1.75} />
-          </View>
+            {settings.scrollMode === 'auto' ? (
+              <Text style={{ color: '#FFFFFF', fontSize: 10, marginTop: 1 }}>
+                {settings.scrollWPM}
+              </Text>
+            ) : null}
+          </Pressable>
         </Animated.View>
       </View>
+
+      <Modal
+        visible={speedPanelOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSpeedPanelOpen(false)}
+      >
+        <Pressable
+          onPress={() => setSpeedPanelOpen(false)}
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.55)',
+            justifyContent: 'flex-end',
+          }}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: colors.bgElevated,
+              borderTopLeftRadius: radius.xl,
+              borderTopRightRadius: radius.xl,
+              borderWidth: 1,
+              borderColor: colors.border,
+              padding: spacing.lg,
+              paddingBottom: spacing.xxl,
+              gap: spacing.lg,
+            }}
+          >
+            <Text style={[typography.h2, { color: colors.text }]}>Kontrol Scroll</Text>
+
+            <View style={{ flexDirection: 'row', gap: spacing.md }}>
+              <Pressable
+                onPress={() => settings.setScrollMode('voice')}
+                style={{
+                  flex: 1,
+                  height: 48,
+                  borderRadius: radius.md,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor:
+                    settings.scrollMode === 'voice' ? colors.accent : colors.bgSubtle,
+                }}
+              >
+                <Voicemail
+                  size={18}
+                  color={settings.scrollMode === 'voice' ? colors.textInverse : colors.text}
+                  strokeWidth={1.75}
+                />
+              </Pressable>
+              <Pressable
+                onPress={() => settings.setScrollMode('auto')}
+                style={{
+                  flex: 1,
+                  height: 48,
+                  borderRadius: radius.md,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor:
+                    settings.scrollMode === 'auto' ? colors.accent : colors.bgSubtle,
+                }}
+              >
+                <Gauge
+                  size={18}
+                  color={settings.scrollMode === 'auto' ? colors.textInverse : colors.text}
+                  strokeWidth={1.75}
+                />
+              </Pressable>
+            </View>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+              <Pressable
+                onPress={() => changeWPM(-10)}
+                style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: radius.pill,
+                  backgroundColor: colors.bgSubtle,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Minus size={18} color={colors.text} strokeWidth={1.75} />
+              </Pressable>
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Text style={[typography.micro, { color: colors.textSecondary }]}>SPEED</Text>
+                <Text style={[typography.h2, { color: colors.text }]}>{settings.scrollWPM} WPM</Text>
+              </View>
+              <Pressable
+                onPress={() => changeWPM(10)}
+                style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: radius.pill,
+                  backgroundColor: colors.bgSubtle,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Plus size={18} color={colors.text} strokeWidth={1.75} />
+              </Pressable>
+            </View>
+
+            <Pressable
+              onPress={() => {
+                restartSession();
+                setSpeedPanelOpen(false);
+              }}
+              style={{
+                height: 48,
+                borderRadius: radius.md,
+                backgroundColor: colors.bgSubtle,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <RotateCcw size={18} color={colors.text} strokeWidth={1.75} />
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Debug HUD */}
       {__DEV__ && (
