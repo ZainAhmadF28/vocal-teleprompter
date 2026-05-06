@@ -41,8 +41,9 @@ export const darkColors: ColorTokens = {
   bg: '#000000',
   bgElevated: '#0A0A0A',
   bgSubtle: '#141414',
-  border: '#1F1F1F',
-  borderStrong: '#2A2A2A',
+  // Borders pakai accent blue tint biar kontras di dark bg (sebelumnya monoton gelap)
+  border: 'rgba(59, 130, 246, 0.22)',
+  borderStrong: 'rgba(59, 130, 246, 0.45)',
 
   text: '#FAFAFA',
   textSecondary: '#A1A1AA',

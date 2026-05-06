@@ -38,12 +38,15 @@ export default function PrompterScreen() {
   const { isPaused, scrollPosition, currentWordIndex, isListening, pause, resume } =
     usePrompterStore();
 
-  const { startSession, stopSession, engine, words } = usePrompterEngine(script?.content ?? '');
+  const { startSession, stopSession, engine, seekToWord, words } = usePrompterEngine(
+    script?.content ?? ''
+  );
   useKeepAwake(isListening);
 
   const scrollRef = useRef<ScrollView>(null);
   const wordPositionsRef = useRef<number[]>([]);
   const [, forceUpdate] = useState(0);
+  const userScrollingRef = useRef(false);
 
   useEffect(() => {
     startSession().catch(console.error);
@@ -51,8 +54,33 @@ export default function PrompterScreen() {
   }, []);
 
   useEffect(() => {
+    // Hindari fight engine vs user kalau user lagi geser manual saat paused
+    if (userScrollingRef.current) return;
     scrollRef.current?.scrollTo({ y: scrollPosition, animated: false });
   }, [scrollPosition]);
+
+  // Pas user finish manual drag (paused), find nearest word + sync engine state
+  const handleScrollEnd = (e: any) => {
+    if (!isPaused) return;
+    userScrollingRef.current = false;
+    const y = e.nativeEvent.contentOffset.y;
+    const positions = wordPositionsRef.current;
+    if (positions.length === 0) return;
+
+    let bestIdx = 0;
+    let bestDiff = Infinity;
+    for (let i = 0; i < positions.length; i++) {
+      const p = positions[i];
+      if (typeof p !== 'number') continue;
+      const diff = Math.abs(p - y);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIdx = i;
+      }
+    }
+    seekToWord(bestIdx);
+    engine.seekTo(y);
+  };
 
   useEffect(() => {
     if (currentWordIndex < 0) {
@@ -105,8 +133,13 @@ export default function PrompterScreen() {
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <ScrollView
         ref={scrollRef}
-        scrollEnabled={false}
+        scrollEnabled={isPaused}
         showsVerticalScrollIndicator={false}
+        onScrollBeginDrag={() => {
+          if (isPaused) userScrollingRef.current = true;
+        }}
+        onMomentumScrollEnd={handleScrollEnd}
+        onScrollEndDrag={handleScrollEnd}
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingHorizontal: spacing.xl,

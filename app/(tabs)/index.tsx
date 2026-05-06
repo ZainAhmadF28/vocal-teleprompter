@@ -1,13 +1,14 @@
-import React, { useMemo } from 'react';
-import { View, Text, FlatList, Pressable, Alert } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, FlatList, Pressable, Alert, TextInput } from 'react-native';
 import { router } from 'expo-router';
-import { Plus, FileText, Search, Menu } from 'lucide-react-native';
+import { Plus, FileText, Search, Menu, X, Settings as SettingsIcon, Image as ImageIcon, Layers, Info } from 'lucide-react-native';
 import { useScriptsStore, type Script } from '@/store/scriptsStore';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Screen } from '@/ui/components/Screen';
 import { Header } from '@/ui/components/Header';
 import { Card } from '@/ui/components/Card';
 import { IconButton } from '@/ui/components/IconButton';
+import { Modal } from 'react-native';
 
 function formatRelativeDate(ts: number): string {
   const now = new Date();
@@ -115,10 +116,101 @@ function NewScriptHero({ onPress }: { onPress: () => void }) {
   );
 }
 
+function MenuSheet({
+  visible,
+  onClose,
+}: {
+  visible: boolean;
+  onClose: () => void;
+}) {
+  const { colors, typography, spacing, radius } = useTheme();
+  const items = [
+    {
+      label: 'Settings',
+      Icon: SettingsIcon,
+      onPress: () => {
+        onClose();
+        router.push('/settings' as any);
+      },
+    },
+    {
+      label: 'Recordings',
+      Icon: ImageIcon,
+      onPress: () => {
+        onClose();
+        router.push('/gallery' as any);
+      },
+    },
+    {
+      label: 'Floating Overlay',
+      Icon: Layers,
+      onPress: () => {
+        onClose();
+        router.push('/overlay' as any);
+      },
+    },
+    {
+      label: 'About',
+      Icon: Info,
+      onPress: () => {
+        onClose();
+        Alert.alert('Vocal Teleprompter', 'Version 1.0.0\nMade by Zain · UIGM');
+      },
+    },
+  ];
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' }} onPress={onClose}>
+        <Pressable
+          onPress={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            top: 60,
+            left: 16,
+            backgroundColor: colors.bgElevated,
+            borderRadius: radius.lg,
+            borderWidth: 1,
+            borderColor: colors.border,
+            paddingVertical: spacing.sm,
+            minWidth: 220,
+            shadowColor: '#000',
+            shadowOpacity: 0.4,
+            shadowRadius: 14,
+          }}
+        >
+          {items.map((it, i) => (
+            <Pressable
+              key={i}
+              onPress={it.onPress}
+              style={({ pressed }) => [
+                {
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: spacing.md,
+                  paddingHorizontal: spacing.lg,
+                  paddingVertical: spacing.md,
+                  backgroundColor: pressed ? colors.bgSubtle : 'transparent',
+                },
+              ]}
+            >
+              <it.Icon size={18} color={colors.textSecondary} strokeWidth={1.75} />
+              <Text style={[typography.body, { color: colors.text }]}>{it.label}</Text>
+            </Pressable>
+          ))}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 export default function ScriptsTab() {
-  const { colors, typography, spacing } = useTheme();
+  const { colors, typography, spacing, radius } = useTheme();
   const scripts = useScriptsStore((s) => s.scripts);
   const addScript = useScriptsStore((s) => s.addScript);
+
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const handleNewScript = () => {
     addScript({ title: 'Untitled Script', content: '', language: 'id-ID', estimatedDurationSec: 0 });
@@ -128,20 +220,103 @@ export default function ScriptsTab() {
     }, 50);
   };
 
-  const data = useMemo(() => scripts, [scripts]);
+  const filtered = useMemo(() => {
+    if (!query.trim()) return scripts;
+    const q = query.toLowerCase();
+    return scripts.filter(
+      (s) => s.title.toLowerCase().includes(q) || s.content.toLowerCase().includes(q)
+    );
+  }, [scripts, query]);
 
   return (
     <Screen>
       <Header
         title="Scripts"
-        left={<IconButton icon={<Menu size={22} color={colors.text} strokeWidth={1.75} />} onPress={() => {}} />}
-        right={<IconButton icon={<Search size={22} color={colors.text} strokeWidth={1.75} />} onPress={() => {}} />}
+        left={
+          <IconButton
+            icon={<Menu size={22} color={colors.text} strokeWidth={1.75} />}
+            onPress={() => setMenuOpen(true)}
+          />
+        }
+        right={
+          <IconButton
+            icon={
+              searchOpen ? (
+                <X size={22} color={colors.text} strokeWidth={1.75} />
+              ) : (
+                <Search size={22} color={colors.text} strokeWidth={1.75} />
+              )
+            }
+            onPress={() => {
+              if (searchOpen) {
+                setQuery('');
+                setSearchOpen(false);
+              } else {
+                setSearchOpen(true);
+              }
+            }}
+          />
+        }
       />
 
+      {searchOpen && (
+        <View
+          style={{
+            paddingHorizontal: spacing.lg,
+            paddingVertical: spacing.sm,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing.sm,
+              backgroundColor: colors.bgSubtle,
+              borderRadius: radius.md,
+              paddingHorizontal: spacing.md,
+              paddingVertical: spacing.sm,
+              borderWidth: 1,
+              borderColor: colors.border,
+            }}
+          >
+            <Search size={16} color={colors.textTertiary} strokeWidth={1.75} />
+            <TextInput
+              autoFocus
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search scripts by title or content"
+              placeholderTextColor={colors.textTertiary}
+              style={{
+                flex: 1,
+                color: colors.text,
+                fontSize: 15,
+                padding: 0,
+              }}
+            />
+            {query.length > 0 && (
+              <Pressable onPress={() => setQuery('')} hitSlop={8}>
+                <X size={16} color={colors.textTertiary} strokeWidth={1.75} />
+              </Pressable>
+            )}
+          </View>
+        </View>
+      )}
+
       <FlatList
-        data={data}
+        data={filtered}
         keyExtractor={(item) => item.id}
-        ListHeaderComponent={<NewScriptHero onPress={handleNewScript} />}
+        ListHeaderComponent={!searchOpen ? <NewScriptHero onPress={handleNewScript} /> : null}
+        ListEmptyComponent={
+          searchOpen && query.length > 0 ? (
+            <View style={{ padding: spacing.xl, alignItems: 'center' }}>
+              <Text style={[typography.body, { color: colors.textSecondary }]}>
+                No scripts match "{query}"
+              </Text>
+            </View>
+          ) : null
+        }
         renderItem={({ item }) => <ScriptListItem script={item} />}
         contentContainerStyle={{
           padding: spacing.lg,
@@ -150,6 +325,8 @@ export default function ScriptsTab() {
         }}
         ItemSeparatorComponent={() => <View style={{ height: spacing.md }} />}
       />
+
+      <MenuSheet visible={menuOpen} onClose={() => setMenuOpen(false)} />
     </Screen>
   );
 }

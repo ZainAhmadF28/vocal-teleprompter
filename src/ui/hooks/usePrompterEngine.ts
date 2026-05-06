@@ -9,15 +9,18 @@ import { useSettingsStore } from '@/store/settingsStore';
 /**
  * Position-based prompter engine (karaoke style).
  *
- * Flow:
- *   STT result → TextMatcher.processTranscript → currentWordIndex (in store)
- *   UI subscribe currentWordIndex → compute targetY dari layout kata
- *   UI call engine.setTargetPosition(targetY) → smooth animate
+ * Two modes:
+ *   - 'voice' (default): STT → TextMatcher → currentWordIndex (karaoke)
+ *   - 'auto': constant pace based on settings.scrollWPM (no voice detection)
+ *
+ * UI subscribe currentWordIndex → compute targetY dari layout kata
+ * UI call engine.setTargetPosition(targetY) → smooth animate
  */
 export function usePrompterEngine(scriptContent: string) {
   const sttRef = useRef(new STTEngine());
   const engineRef = useRef(new ScrollEngine());
   const matcherRef = useRef(new TextMatcher(scriptContent));
+  const autoTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const {
     isPaused,
@@ -55,6 +58,11 @@ export function usePrompterEngine(scriptContent: string) {
 
   const words = useMemo(() => matcherRef.current.getWords(), [scriptContent]);
 
+  // Apply sensitivity setting to matcher whenever it changes
+  useEffect(() => {
+    matcherRef.current.setSensitivity(settings.defaultSensitivity);
+  }, [settings.defaultSensitivity]);
+
   const startSession = useCallback(async () => {
     const engine = engineRef.current;
     const stt = sttRef.current;
@@ -63,10 +71,26 @@ export function usePrompterEngine(scriptContent: string) {
     engine.start();
     setListening(true);
 
+    if (settings.scrollMode === 'auto') {
+      // Auto-scroll mode: advance currentWordIndex by 1 every (60 / WPM) seconds
+      const intervalMs = Math.max(80, Math.round(60000 / Math.max(60, settings.scrollWPM)));
+      autoTimerRef.current = setInterval(() => {
+        const cur = usePrompterStore.getState().currentWordIndex;
+        const isPaused = usePrompterStore.getState().isPaused;
+        if (isPaused) return;
+        const total = matcher.getWordCount();
+        if (cur + 1 < total) {
+          matcher.seekToWord(cur + 1);
+          setCurrentWordIndex(cur + 1);
+        }
+      }, intervalMs);
+      return;
+    }
+
+    // Voice mode (default)
     await stt.start(detectedLanguage, (transcript, _isFinal) => {
       if (!transcript) return;
 
-      // Voice commands first (pause/resume/restart)
       if (settings.voiceCommandsEnabled) {
         const cmd = detectVoiceCommand(transcript);
         if (cmd) {
@@ -75,7 +99,6 @@ export function usePrompterEngine(scriptContent: string) {
         }
       }
 
-      // Karaoke matching: process transcript, advance currentWordIndex if matched
       const newIndex = matcher.processTranscript(transcript);
       setCurrentWordIndex(newIndex);
       setLastSpeechTime(Date.now());
@@ -86,9 +109,22 @@ export function usePrompterEngine(scriptContent: string) {
     sttRef.current.stop();
     engineRef.current.stop();
     matcherRef.current.reset();
+    if (autoTimerRef.current) {
+      clearInterval(autoTimerRef.current);
+      autoTimerRef.current = null;
+    }
     setListening(false);
     setCurrentWordIndex(-1);
   }, [setListening, setCurrentWordIndex]);
+
+  /** Manual seek: dipakai prompter screen pas user geser scroll manual saat paused */
+  const seekToWord = useCallback(
+    (idx: number) => {
+      matcherRef.current.seekToWord(idx);
+      setCurrentWordIndex(idx);
+    },
+    [setCurrentWordIndex]
+  );
 
   const handleVoiceCommand = (cmd: ReturnType<typeof detectVoiceCommand>) => {
     switch (cmd) {
@@ -116,12 +152,14 @@ export function usePrompterEngine(scriptContent: string) {
     return () => {
       sttRef.current.stop();
       engineRef.current.stop();
+      if (autoTimerRef.current) clearInterval(autoTimerRef.current);
     };
   }, []);
 
   return {
     startSession,
     stopSession,
+    seekToWord,
     engine: engineRef.current,
     matcher: matcherRef.current,
     words,

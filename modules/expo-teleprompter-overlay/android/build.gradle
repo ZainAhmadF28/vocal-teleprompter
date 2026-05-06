@@ -1,0 +1,30 @@
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+group = 'expo.modules.teleprompteroverlay'
+version = '1.0.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+
+android {
+  namespace "expo.modules.teleprompteroverlay"
+  compileSdk safeExtGet("compileSdkVersion", 35)
+
+  defaultConfig {
+    minSdk safeExtGet("minSdkVersion", 24)
+    targetSdk safeExtGet("targetSdkVersion", 35)
+    versionCode 1
+    versionName "1.0.0"
+  }
+
+  lintOptions {
+    abortOnError false
+  }
+}
+
+def safeExtGet(prop, fallback) {
+  rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}

@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, Pressable, ScrollView } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, Pressable, ScrollView, Alert, Modal } from 'react-native';
 import { router } from 'expo-router';
 import {
   PictureInPicture2,
@@ -8,14 +8,19 @@ import {
   AlignCenter,
   AlignRight,
   Settings as SettingsIcon,
+  FileText,
+  X,
+  Power,
 } from 'lucide-react-native';
 import { useTheme } from '@/theme/ThemeProvider';
 import { useSettingsStore } from '@/store/settingsStore';
+import { useScriptsStore, type Script } from '@/store/scriptsStore';
 import { Screen } from '@/ui/components/Screen';
 import { Header } from '@/ui/components/Header';
 import { Card } from '@/ui/components/Card';
 import { Button } from '@/ui/components/Button';
 import { IconButton } from '@/ui/components/IconButton';
+import TeleprompterOverlay from '../../modules/expo-teleprompter-overlay/src/index';
 
 function SegmentedControl<T extends string>({
   options,
@@ -71,9 +76,98 @@ function SegmentedControl<T extends string>({
   );
 }
 
+function ScriptPickerModal({
+  visible,
+  scripts,
+  onPick,
+  onClose,
+}: {
+  visible: boolean;
+  scripts: Script[];
+  onPick: (s: Script) => void;
+  onClose: () => void;
+}) {
+  const { colors, typography, spacing, radius } = useTheme();
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' }} onPress={onClose}>
+        <Pressable
+          onPress={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            backgroundColor: colors.bgElevated,
+            borderTopLeftRadius: radius.xl,
+            borderTopRightRadius: radius.xl,
+            borderTopWidth: 1,
+            borderColor: colors.border,
+            paddingTop: spacing.md,
+            paddingBottom: spacing.xxl,
+            paddingHorizontal: spacing.lg,
+            maxHeight: '70%',
+          }}
+        >
+          <View
+            style={{
+              width: 40,
+              height: 4,
+              borderRadius: 2,
+              backgroundColor: colors.border,
+              alignSelf: 'center',
+              marginBottom: spacing.md,
+            }}
+          />
+          <Text style={[typography.h2, { color: colors.text, marginBottom: spacing.md }]}>
+            Pilih Script
+          </Text>
+          <ScrollView style={{ maxHeight: 400 }}>
+            {scripts.length === 0 ? (
+              <Text
+                style={[typography.body, { color: colors.textSecondary, textAlign: 'center', padding: spacing.xl }]}
+              >
+                Belum ada script. Bikin di tab Scripts dulu.
+              </Text>
+            ) : (
+              scripts.map((s) => (
+                <Pressable
+                  key={s.id}
+                  onPress={() => onPick(s)}
+                  style={({ pressed }) => [
+                    {
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: spacing.md,
+                      paddingVertical: spacing.md,
+                      paddingHorizontal: spacing.sm,
+                      borderRadius: radius.md,
+                      backgroundColor: pressed ? colors.bgSubtle : 'transparent',
+                    },
+                  ]}
+                >
+                  <FileText size={18} color={colors.textSecondary} strokeWidth={1.75} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[typography.bodyEmph, { color: colors.text }]} numberOfLines={1}>
+                      {s.title}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))
+            )}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 export default function OverlayTab() {
   const { colors, typography, spacing, radius } = useTheme();
   const settings = useSettingsStore();
+  const scripts = useScriptsStore((s) => s.scripts);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [overlayActive, setOverlayActive] = useState(false);
 
   return (
     <Screen>
@@ -242,17 +336,82 @@ export default function OverlayTab() {
           </View>
         </Card>
 
-        <Button
-          label="Launch Floating Mode"
-          variant="primary"
-          fullWidth
-          leftIcon={<PictureInPicture2 size={18} color={colors.textInverse} strokeWidth={1.75} />}
-          onPress={() => {
-            // TODO: launch overlay (Sprint 4 native module)
-            router.push('/');
-          }}
-        />
+        {overlayActive ? (
+          <Button
+            label="Hide Floating Overlay"
+            variant="danger"
+            fullWidth
+            leftIcon={<Power size={18} color={colors.textInverse} strokeWidth={1.75} />}
+            onPress={async () => {
+              await TeleprompterOverlay.hide();
+              setOverlayActive(false);
+            }}
+          />
+        ) : (
+          <Button
+            label="Launch Floating Mode"
+            variant="primary"
+            fullWidth
+            leftIcon={<PictureInPicture2 size={18} color={colors.textInverse} strokeWidth={1.75} />}
+            onPress={async () => {
+              const granted = await TeleprompterOverlay.hasPermission();
+              if (!granted) {
+                Alert.alert(
+                  '"Display over other apps" Belum Diizinkan',
+                  'Buka system settings buat enable, lalu coba lagi.',
+                  [
+                    { text: 'Batal', style: 'cancel' },
+                    {
+                      text: 'Buka Settings',
+                      onPress: async () => {
+                        await TeleprompterOverlay.requestPermission();
+                      },
+                    },
+                  ]
+                );
+                return;
+              }
+              if (scripts.length === 0) {
+                Alert.alert(
+                  'Belum Ada Script',
+                  'Bikin script dulu di tab Scripts sebelum launch overlay.'
+                );
+                return;
+              }
+              setPickerOpen(true);
+            }}
+          />
+        )}
       </ScrollView>
+
+      <ScriptPickerModal
+        visible={pickerOpen}
+        scripts={scripts}
+        onClose={() => setPickerOpen(false)}
+        onPick={async (script) => {
+          setPickerOpen(false);
+          try {
+            const sizeWidth = settings.overlayDefaultSize.width;
+            const sizeHeight = settings.overlayDefaultSize.height;
+            await TeleprompterOverlay.show({
+              text: script.content,
+              fontSize: 22,
+              fontColor: '#FFFFFF',
+              backgroundColor: '#000000',
+              opacity: settings.overlayOpacity,
+              position: { x: 60, y: 200 },
+              size: { width: sizeWidth * 2, height: sizeHeight * 2 },
+            });
+            setOverlayActive(true);
+            Alert.alert(
+              'Overlay Aktif',
+              'Bisa di-drag pakai jari. Kembali ke tab ini untuk hide.'
+            );
+          } catch (e: any) {
+            Alert.alert('Error', String(e?.message ?? e));
+          }
+        }}
+      />
     </Screen>
   );
 }

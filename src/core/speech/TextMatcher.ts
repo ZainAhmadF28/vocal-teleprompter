@@ -28,9 +28,9 @@ export class TextMatcher {
    * Berapa kata ke depan dari currentIndex yang di-search untuk match.
    * - Kecil (5-10) = strict, user harus baca berurutan
    * - Besar (20-40) = lenient, user bisa skip beberapa kata
-   * Sekarang: 25
+   * Default 25, bisa di-override via `setSensitivity()` (low=15, med=25, high=40).
    */
-  private readonly LOOKAHEAD_WORDS = 25;
+  private LOOKAHEAD_WORDS = 25;
 
   /**
    * Berapa kata terakhir dari transcript yang dipakai sebagai context match.
@@ -126,6 +126,11 @@ export class TextMatcher {
   /** Manual seek (mis. user pause + tap kata buat reposisi) */
   seekToWord(index: number): void {
     this.currentIndex = Math.max(-1, Math.min(this.words.length - 1, index));
+  }
+
+  /** Adjust lookahead range based on sensitivity (low=strict, high=lenient) */
+  setSensitivity(level: 'low' | 'medium' | 'high'): void {
+    this.LOOKAHEAD_WORDS = level === 'low' ? 15 : level === 'high' ? 40 : 25;
   }
 
   // ---------------------------------------------------------------------------

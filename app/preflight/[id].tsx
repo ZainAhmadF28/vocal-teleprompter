@@ -7,14 +7,16 @@ import {
   Layers,
   Video,
   Play,
-  CloudCheck,
   TextCursorInput,
   Mic,
   MicOff,
   AudioLines,
   Minus,
   Plus,
+  Gauge,
+  Voicemail,
 } from 'lucide-react-native';
+import type { ScrollMode } from '@/store/settingsStore';
 import { useScriptsStore } from '@/store/scriptsStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { usePrompterStore } from '@/store/prompterStore';
@@ -181,10 +183,12 @@ export default function PreflightScreen() {
   const script = getScript(id);
 
   const [mode, setMode] = useState<Mode>('fullscreen');
+  const [scrollMode, setScrollModeLocal] = useState<ScrollMode>(settings.scrollMode);
   const [fontSize, setFontSize] = useState(settings.defaultFontSize);
   const [sensitivity, setSensitivity] = useState<'low' | 'medium' | 'high'>(
     settings.defaultSensitivity
   );
+  const [wpm, setWpm] = useState(settings.scrollWPM);
 
   const sensitivityToValue = (s: typeof sensitivity) =>
     s === 'low' ? 0 : s === 'medium' ? 1 : 2;
@@ -215,8 +219,10 @@ export default function PreflightScreen() {
     setActiveScript(id);
     settings.setDefaultFontSize(fontSize);
     settings.setDefaultSensitivity(sensitivity);
+    settings.setScrollMode(scrollMode);
+    settings.setScrollWPM(wpm);
 
-    const baselineWPS = settings.scrollWPM / 60;
+    const baselineWPS = wpm / 60;
 
     if (mode === 'fullscreen') {
       router.replace(`/prompter/${id}?fontSize=${fontSize}&baselineWPS=${baselineWPS}`);
@@ -237,12 +243,6 @@ export default function PreflightScreen() {
             icon={<ChevronLeft size={22} color={colors.text} strokeWidth={1.75} />}
             onPress={() => router.back()}
           />
-        }
-        right={
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingRight: spacing.xs }}>
-            <CloudCheck size={14} color={colors.textSecondary} strokeWidth={1.75} />
-            <Text style={[typography.micro, { color: colors.textSecondary }]}>SAVED</Text>
-          </View>
         }
       />
 
@@ -265,6 +265,83 @@ export default function PreflightScreen() {
             <ModeCard mode={MODES[1]} active={mode === 'floating'} onPress={() => setMode('floating')} />
           </View>
           <ModeCard mode={MODES[2]} active={mode === 'camera'} onPress={() => setMode('camera')} />
+        </View>
+
+        {/* Scroll Mode (Voice-driven vs Auto-scroll) */}
+        <View style={{ gap: spacing.md }}>
+          <Text style={[typography.micro, { color: colors.textSecondary }]}>SCROLL MODE</Text>
+          <View style={{ flexDirection: 'row', gap: spacing.md }}>
+            <Pressable
+              onPress={() => setScrollModeLocal('voice')}
+              style={({ pressed }) => [
+                {
+                  flex: 1,
+                  backgroundColor: scrollMode === 'voice' ? colors.accentSubtle : colors.bgElevated,
+                  borderRadius: radius.lg,
+                  borderWidth: scrollMode === 'voice' ? 1.5 : 1,
+                  borderColor: scrollMode === 'voice' ? colors.accent : colors.border,
+                  padding: spacing.lg,
+                  gap: spacing.xs,
+                  opacity: pressed ? 0.85 : 1,
+                  alignItems: 'center',
+                },
+              ]}
+            >
+              <Voicemail
+                size={22}
+                color={scrollMode === 'voice' ? colors.accent : colors.textSecondary}
+                strokeWidth={1.75}
+              />
+              <Text
+                style={[
+                  typography.bodyEmph,
+                  { color: scrollMode === 'voice' ? colors.accent : colors.text },
+                ]}
+              >
+                Voice-driven
+              </Text>
+              <Text
+                style={[typography.caption, { color: colors.textSecondary, textAlign: 'center' }]}
+              >
+                Scroll ngikutin suara
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setScrollModeLocal('auto')}
+              style={({ pressed }) => [
+                {
+                  flex: 1,
+                  backgroundColor: scrollMode === 'auto' ? colors.accentSubtle : colors.bgElevated,
+                  borderRadius: radius.lg,
+                  borderWidth: scrollMode === 'auto' ? 1.5 : 1,
+                  borderColor: scrollMode === 'auto' ? colors.accent : colors.border,
+                  padding: spacing.lg,
+                  gap: spacing.xs,
+                  opacity: pressed ? 0.85 : 1,
+                  alignItems: 'center',
+                },
+              ]}
+            >
+              <Gauge
+                size={22}
+                color={scrollMode === 'auto' ? colors.accent : colors.textSecondary}
+                strokeWidth={1.75}
+              />
+              <Text
+                style={[
+                  typography.bodyEmph,
+                  { color: scrollMode === 'auto' ? colors.accent : colors.text },
+                ]}
+              >
+                Auto-scroll
+              </Text>
+              <Text
+                style={[typography.caption, { color: colors.textSecondary, textAlign: 'center' }]}
+              >
+                Kecepatan tetap
+              </Text>
+            </Pressable>
+          </View>
         </View>
 
         {/* Telemetry */}
@@ -308,46 +385,94 @@ export default function PreflightScreen() {
             />
           </View>
 
-          {/* Voice Sync (sensitivity) */}
-          <View
-            style={{
-              backgroundColor: colors.bgElevated,
-              borderRadius: radius.lg,
-              borderWidth: 1,
-              borderColor: colors.border,
-              padding: spacing.lg,
-              gap: spacing.md,
-            }}
-          >
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-                <Text style={[typography.bodyEmph, { color: colors.text }]}>Voice Sync</Text>
-                <Mic size={14} color={colors.textSecondary} strokeWidth={1.75} />
+          {/* Voice Sync (sensitivity) — only visible in voice mode */}
+          {scrollMode === 'voice' ? (
+            <View
+              style={{
+                backgroundColor: colors.bgElevated,
+                borderRadius: radius.lg,
+                borderWidth: 1,
+                borderColor: colors.border,
+                padding: spacing.lg,
+                gap: spacing.md,
+              }}
+            >
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                  <Text style={[typography.bodyEmph, { color: colors.text }]}>Voice Sync</Text>
+                  <Mic size={14} color={colors.textSecondary} strokeWidth={1.75} />
+                </View>
+                <View
+                  style={{
+                    paddingHorizontal: spacing.md,
+                    paddingVertical: 4,
+                    backgroundColor: colors.bgSubtle,
+                    borderRadius: radius.sm,
+                  }}
+                >
+                  <Text style={[typography.caption, { color: colors.text }]}>
+                    {sensitivity === 'low' ? 'Low' : sensitivity === 'medium' ? 'Medium' : 'High'}
+                  </Text>
+                </View>
               </View>
-              <View
-                style={{
-                  paddingHorizontal: spacing.md,
-                  paddingVertical: 4,
-                  backgroundColor: colors.bgSubtle,
-                  borderRadius: radius.sm,
-                }}
-              >
-                <Text style={[typography.caption, { color: colors.text }]}>
-                  {sensitivity === 'low' ? 'Low' : sensitivity === 'medium' ? 'Medium' : 'High'}
-                </Text>
-              </View>
+              <Stepper
+                value={sensitivityToValue(sensitivity)}
+                min={0}
+                max={2}
+                step={1}
+                onChange={(v) => setSensitivity(valueToSensitivity(v))}
+                formatLabel={(v) => (v === 0 ? 'Low' : v === 1 ? 'Medium' : 'High')}
+                leftIcon={<MicOff size={16} color={colors.textSecondary} strokeWidth={1.75} />}
+                rightIcon={<AudioLines size={20} color={colors.textSecondary} strokeWidth={1.75} />}
+              />
+              <Text style={[typography.caption, { color: colors.textSecondary }]}>
+                Low = strict matching · High = lenient (toleran kalau STT salah dengar)
+              </Text>
             </View>
-            <Stepper
-              value={sensitivityToValue(sensitivity)}
-              min={0}
-              max={2}
-              step={1}
-              onChange={(v) => setSensitivity(valueToSensitivity(v))}
-              formatLabel={(v) => (v === 0 ? 'Low' : v === 1 ? 'Medium' : 'High')}
-              leftIcon={<MicOff size={16} color={colors.textSecondary} strokeWidth={1.75} />}
-              rightIcon={<AudioLines size={20} color={colors.textSecondary} strokeWidth={1.75} />}
-            />
-          </View>
+          ) : (
+            <View
+              style={{
+                backgroundColor: colors.bgElevated,
+                borderRadius: radius.lg,
+                borderWidth: 1,
+                borderColor: colors.border,
+                padding: spacing.lg,
+                gap: spacing.md,
+              }}
+            >
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                  <Text style={[typography.bodyEmph, { color: colors.text }]}>Reading Speed</Text>
+                  <Gauge size={14} color={colors.textSecondary} strokeWidth={1.75} />
+                </View>
+                <View
+                  style={{
+                    paddingHorizontal: spacing.md,
+                    paddingVertical: 4,
+                    backgroundColor: colors.bgSubtle,
+                    borderRadius: radius.sm,
+                  }}
+                >
+                  <Text style={[typography.caption, { color: colors.text, fontFamily: 'monospace' }]}>
+                    {wpm} WPM
+                  </Text>
+                </View>
+              </View>
+              <Stepper
+                value={wpm}
+                min={60}
+                max={250}
+                step={10}
+                onChange={setWpm}
+                formatLabel={(v) => `${v} WPM`}
+                leftIcon={<Gauge size={16} color={colors.textSecondary} strokeWidth={1.75} />}
+                rightIcon={<Gauge size={20} color={colors.textSecondary} strokeWidth={1.75} />}
+              />
+              <Text style={[typography.caption, { color: colors.textSecondary }]}>
+                Words per minute. Normal speech: 130-160 WPM.
+              </Text>
+            </View>
+          )}
         </View>
 
         <Button

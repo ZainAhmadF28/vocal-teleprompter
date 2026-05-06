@@ -3,9 +3,11 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { mmkvPersistConfig } from '@/storage/mmkv';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
+export type ScrollMode = 'voice' | 'auto';
 
 interface SettingsState {
   themeMode: ThemeMode;
+  scrollMode: ScrollMode;
   defaultFontSize: number;
   defaultSensitivity: 'low' | 'medium' | 'high';
   smoothingStrength: number;
@@ -21,6 +23,7 @@ interface SettingsState {
   overlayBackdrop: 'transparent' | 'dim' | 'blur';
 
   setThemeMode: (m: ThemeMode) => void;
+  setScrollMode: (m: ScrollMode) => void;
   setDefaultFontSize: (size: number) => void;
   setDefaultSensitivity: (s: SettingsState['defaultSensitivity']) => void;
   setSmoothingStrength: (v: number) => void;
@@ -40,6 +43,7 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       themeMode: 'dark',
+      scrollMode: 'voice',
       defaultFontSize: 48,
       defaultSensitivity: 'medium',
       smoothingStrength: 0.15,
@@ -55,6 +59,7 @@ export const useSettingsStore = create<SettingsState>()(
       overlayBackdrop: 'dim',
 
       setThemeMode: (m) => set({ themeMode: m }),
+      setScrollMode: (m) => set({ scrollMode: m }),
       setDefaultFontSize: (size) => set({ defaultFontSize: size }),
       setDefaultSensitivity: (s) => set({ defaultSensitivity: s }),
       setSmoothingStrength: (v) => set({ smoothingStrength: v }),
