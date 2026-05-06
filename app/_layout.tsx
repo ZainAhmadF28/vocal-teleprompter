@@ -1,34 +1,43 @@
 import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StyleSheet } from 'react-native';
+import { ThemeProvider, useTheme } from '@/theme/ThemeProvider';
+
+function ThemedStack() {
+  const { colors } = useTheme();
+  return (
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: colors.bg },
+        animation: 'slide_from_right',
+      }}
+    >
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="editor/[id]" />
+      <Stack.Screen
+        name="calibrate"
+        options={{ presentation: 'modal' }}
+      />
+      <Stack.Screen name="prompter/[id]" />
+      <Stack.Screen name="preflight/[id]" />
+      <Stack.Screen name="camera/[id]" />
+      <Stack.Screen name="gallery" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="player" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
+    </Stack>
+  );
+}
 
 export default function RootLayout() {
   return (
-    <GestureHandlerRootView style={styles.root}>
-      <StatusBar style="light" />
-      <Stack
-        screenOptions={{
-          headerStyle: { backgroundColor: '#000000' },
-          headerTintColor: '#FFFFFF',
-          headerTitleStyle: { fontWeight: '600' },
-          contentStyle: { backgroundColor: '#000000' },
-          animation: 'slide_from_right',
-        }}
-      >
-        <Stack.Screen name="index" options={{ title: 'My Scripts' }} />
-        <Stack.Screen name="editor/[id]" options={{ title: 'Editor' }} />
-        <Stack.Screen
-          name="calibrate"
-          options={{ title: 'Calibration', presentation: 'modal' }}
-        />
-        <Stack.Screen
-          name="prompter/[id]"
-          options={{ headerShown: false }}
-        />
-        <Stack.Screen name="settings" options={{ title: 'Settings' }} />
-      </Stack>
-    </GestureHandlerRootView>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <GestureHandlerRootView style={styles.root}>
+          <ThemedStack />
+        </GestureHandlerRootView>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
 

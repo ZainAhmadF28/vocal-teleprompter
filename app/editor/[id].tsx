@@ -1,19 +1,33 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
   TextInput,
-  TouchableOpacity,
-  StyleSheet,
   ScrollView,
-  Switch,
+  Pressable,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
-import { useLocalSearchParams, router, useNavigation } from 'expo-router';
+import { useLocalSearchParams, router } from 'expo-router';
+import {
+  ChevronLeft,
+  Save,
+  TextCursorInput,
+  Gauge,
+  Languages,
+  Mic,
+  Check,
+} from 'lucide-react-native';
 import { useScriptsStore } from '@/store/scriptsStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { usePrompterStore } from '@/store/prompterStore';
 import { detectLanguageFromScript, getLanguageLabel } from '@/core/speech/LanguageDetector';
-import { colors } from '@/theme/colors';
+import { useTheme } from '@/theme/ThemeProvider';
+import { Screen } from '@/ui/components/Screen';
+import { Header } from '@/ui/components/Header';
+import { IconButton } from '@/ui/components/IconButton';
+import { Button } from '@/ui/components/Button';
 
 const SUPPORTED_LANGUAGES = [
   { bcp47: 'id-ID', label: 'Indonesian' },
@@ -23,21 +37,133 @@ const SUPPORTED_LANGUAGES = [
   { bcp47: 'zh-CN', label: 'Mandarin' },
 ];
 
-function estimateDuration(text: string, wps = 2.5): number {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  return Math.round(words / wps);
+const FONT_SIZES = [32, 40, 48, 56, 64];
+const SPEED_PRESETS = [
+  { wpm: 100, label: 'Slow' },
+  { wpm: 140, label: 'Normal' },
+  { wpm: 180, label: 'Fast' },
+];
+
+function ToolbarButton({
+  icon,
+  label,
+  onPress,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onPress: () => void;
+}) {
+  const { colors, typography, spacing } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        {
+          flex: 1,
+          alignItems: 'center',
+          gap: spacing.xs,
+          paddingVertical: spacing.md,
+          opacity: pressed ? 0.6 : 1,
+        },
+      ]}
+    >
+      {icon}
+      <Text style={[typography.caption, { color: colors.textSecondary }]}>{label}</Text>
+    </Pressable>
+  );
 }
 
-function formatDuration(sec: number): string {
-  if (sec < 60) return `${sec} detik`;
-  const min = Math.floor(sec / 60);
-  const s = sec % 60;
-  return s > 0 ? `${min} mnt ${s} dtk` : `${min} menit`;
+function PickerModal({
+  visible,
+  title,
+  options,
+  selectedValue,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean;
+  title: string;
+  options: { value: string | number; label: string; sub?: string }[];
+  selectedValue: string | number;
+  onSelect: (v: any) => void;
+  onClose: () => void;
+}) {
+  const { colors, typography, spacing, radius } = useTheme();
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
+        onPress={onClose}
+      >
+        <Pressable
+          style={{
+            backgroundColor: colors.bgElevated,
+            borderTopLeftRadius: radius.xl,
+            borderTopRightRadius: radius.xl,
+            padding: spacing.lg,
+            paddingBottom: spacing.xxl,
+            gap: spacing.md,
+            borderTopWidth: 1,
+            borderColor: colors.border,
+          }}
+          onPress={(e) => e.stopPropagation()}
+        >
+          {/* Drag handle */}
+          <View
+            style={{
+              width: 40,
+              height: 4,
+              borderRadius: 2,
+              backgroundColor: colors.border,
+              alignSelf: 'center',
+            }}
+          />
+          <Text style={[typography.h2, { color: colors.text }]}>{title}</Text>
+          <View style={{ gap: spacing.xs }}>
+            {options.map((opt) => {
+              const active = opt.value === selectedValue;
+              return (
+                <Pressable
+                  key={String(opt.value)}
+                  onPress={() => {
+                    onSelect(opt.value);
+                    onClose();
+                  }}
+                  style={({ pressed }) => [
+                    {
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingHorizontal: spacing.md,
+                      paddingVertical: spacing.md,
+                      borderRadius: radius.md,
+                      backgroundColor: pressed ? colors.bgSubtle : 'transparent',
+                    },
+                  ]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={[typography.body, { color: colors.text }]}>{opt.label}</Text>
+                    {opt.sub && (
+                      <Text style={[typography.caption, { color: colors.textSecondary }]}>
+                        {opt.sub}
+                      </Text>
+                    )}
+                  </View>
+                  {active && <Check size={20} color={colors.accent} strokeWidth={2} />}
+                </Pressable>
+              );
+            })}
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
 }
 
 export default function EditorScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const navigation = useNavigation();
+  const { colors, typography, spacing, radius } = useTheme();
+
   const getScript = useScriptsStore((s) => s.getScript);
   const updateScript = useScriptsStore((s) => s.updateScript);
   const settings = useSettingsStore();
@@ -50,11 +176,11 @@ export default function EditorScreen() {
   const [content, setContent] = useState(script?.content ?? '');
   const [language, setLanguage] = useState(script?.language ?? 'id-ID');
   const [fontSize, setFontSize] = useState(settings.defaultFontSize);
-  const [sensitivity, setSensitivity] = useState(settings.defaultSensitivity);
-  const [useOverlay, setUseOverlay] = useState(false);
-  const [showLangPicker, setShowLangPicker] = useState(false);
+  const [wpm, setWpm] = useState(settings.scrollWPM);
 
-  // Auto-detect language when content changes
+  const [openPicker, setOpenPicker] = useState<null | 'size' | 'speed' | 'lang'>(null);
+
+  // Auto language detect
   useEffect(() => {
     if (content.length > 30) {
       const { lang } = detectLanguageFromScript(content);
@@ -62,265 +188,199 @@ export default function EditorScreen() {
     }
   }, [content]);
 
-  // Auto-save to store on changes
+  // Autosave
   useEffect(() => {
     if (!script) return;
     const timer = setTimeout(() => {
+      const wps = wpm / 60;
+      const words = content.trim().split(/\s+/).filter(Boolean).length;
       updateScript(id, {
         title,
         content,
         language,
-        estimatedDurationSec: estimateDuration(content),
+        estimatedDurationSec: Math.round(words / wps),
       });
     }, 500);
     return () => clearTimeout(timer);
-  }, [title, content, language, id, script, updateScript]);
+  }, [title, content, language, wpm, id, script, updateScript]);
 
-  // Update nav title
-  useEffect(() => {
-    navigation.setOptions({ title: title || 'Editor' });
-  }, [title, navigation]);
+  const wordsCount = useMemo(
+    () => content.trim().split(/\s+/).filter(Boolean).length,
+    [content]
+  );
 
-  const handleStart = () => {
-    updateScript(id, { title, content, language });
+  const handleStartPrompter = () => {
     setDetectedLanguage(language);
     setActiveScript(id);
-    router.push(`/calibrate?scriptId=${id}&fontSize=${fontSize}&sensitivity=${sensitivity}&overlay=${useOverlay}`);
+    router.push(`/preflight/${id}` as any);
+  };
+
+  const handleSave = () => {
+    updateScript(id, { title, content, language });
+    router.back();
   };
 
   if (!script) {
     return (
-      <View style={styles.container}>
-        <Text style={styles.errorText}>Script tidak ditemukan.</Text>
-      </View>
+      <Screen>
+        <Header
+          title="Editor"
+          left={
+            <IconButton
+              icon={<ChevronLeft size={22} color={colors.text} strokeWidth={1.75} />}
+              onPress={() => router.back()}
+            />
+          }
+        />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={[typography.body, { color: colors.danger }]}>Script tidak ditemukan.</Text>
+        </View>
+      </Screen>
     );
   }
 
-  const detectedConf = content.length > 30
-    ? Math.round(Math.min(0.99, content.length / 200) * 100)
-    : null;
-
   return (
-    <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
-      <View style={styles.inner}>
-        <TextInput
-          style={styles.titleInput}
-          value={title}
-          onChangeText={setTitle}
-          placeholder="Judul script..."
-          placeholderTextColor={colors.textDim}
-          returnKeyType="next"
-        />
+    <Screen>
+      <Header
+        title="Edit Script"
+        left={
+          <IconButton
+            icon={<ChevronLeft size={22} color={colors.text} strokeWidth={1.75} />}
+            onPress={() => router.back()}
+          />
+        }
+        right={
+          <Pressable
+            onPress={handleSave}
+            style={({ pressed }) => [
+              {
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: spacing.xs,
+                backgroundColor: colors.accent,
+                paddingHorizontal: spacing.md,
+                paddingVertical: spacing.sm,
+                borderRadius: radius.md,
+                opacity: pressed ? 0.85 : 1,
+              },
+            ]}
+          >
+            <Save size={16} color={colors.textInverse} strokeWidth={1.75} />
+            <Text style={[typography.bodyEmph, { color: colors.textInverse }]}>Save</Text>
+          </Pressable>
+        }
+      />
 
-        <TextInput
-          style={styles.contentInput}
-          value={content}
-          onChangeText={setContent}
-          placeholder="Paste atau ketik script kamu di sini..."
-          placeholderTextColor={colors.textDim}
-          multiline
-          textAlignVertical="top"
-        />
-
-        {/* Language row */}
-        <TouchableOpacity
-          style={styles.infoRow}
-          onPress={() => setShowLangPicker(!showLangPicker)}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1 }}
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg, paddingBottom: 120 }}
+          keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.infoLabel}>🌐 Bahasa</Text>
-          <Text style={styles.infoValue}>
-            {getLanguageLabel(language)}
-            {detectedConf ? ` (${detectedConf}%)` : ''}
-            {'  ▼'}
-          </Text>
-        </TouchableOpacity>
+          <TextInput
+            value={title}
+            onChangeText={setTitle}
+            placeholder="Untitled Script"
+            placeholderTextColor={colors.textTertiary}
+            style={[
+              typography.display,
+              { color: colors.text, paddingVertical: spacing.sm },
+            ]}
+          />
 
-        {showLangPicker && (
-          <View style={styles.langPicker}>
-            {SUPPORTED_LANGUAGES.map((l) => (
-              <TouchableOpacity
-                key={l.bcp47}
-                style={[
-                  styles.langOption,
-                  language === l.bcp47 && styles.langOptionActive,
-                ]}
-                onPress={() => {
-                  setLanguage(l.bcp47);
-                  setShowLangPicker(false);
-                }}
-              >
-                <Text
-                  style={[
-                    styles.langOptionText,
-                    language === l.bcp47 && styles.langOptionTextActive,
-                  ]}
-                >
-                  {l.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
+          <TextInput
+            value={content}
+            onChangeText={setContent}
+            placeholder="Start typing your script here..."
+            placeholderTextColor={colors.textTertiary}
+            multiline
+            textAlignVertical="top"
+            style={[
+              typography.h2,
+              {
+                color: colors.text,
+                fontWeight: '400',
+                lineHeight: 28,
+                minHeight: 280,
+              },
+            ]}
+          />
 
-        {content.length > 0 && (
-          <Text style={styles.estimate}>
-            📊 Estimasi: {formatDuration(estimateDuration(content))} @ kecepatan normal
-          </Text>
-        )}
+          {wordsCount > 0 && (
+            <Text style={[typography.caption, { color: colors.textSecondary }]}>
+              {wordsCount} words · {getLanguageLabel(language)} · ~{Math.round(wordsCount / (wpm / 60))}s @ {wpm} wpm
+            </Text>
+          )}
 
-        {/* Font size */}
-        <View style={styles.settingRow}>
-          <Text style={styles.settingLabel}>⚙ Ukuran Font</Text>
-          <View style={styles.stepperRow}>
-            <TouchableOpacity
-              style={styles.stepper}
-              onPress={() => setFontSize(Math.max(24, fontSize - 4))}
-            >
-              <Text style={styles.stepperText}>−</Text>
-            </TouchableOpacity>
-            <Text style={styles.settingValue}>{fontSize}pt</Text>
-            <TouchableOpacity
-              style={styles.stepper}
-              onPress={() => setFontSize(Math.min(96, fontSize + 4))}
-            >
-              <Text style={styles.stepperText}>+</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+          <Button
+            label="Continue to Pre-flight"
+            variant="primary"
+            fullWidth
+            leftIcon={<Mic size={18} color={colors.textInverse} strokeWidth={1.75} />}
+            onPress={handleStartPrompter}
+            disabled={!content.trim()}
+          />
+        </ScrollView>
 
-        {/* Sensitivity */}
-        <View style={styles.settingRow}>
-          <Text style={styles.settingLabel}>⚙ Sensitivitas</Text>
-          <View style={styles.segmentedControl}>
-            {(['low', 'medium', 'high'] as const).map((s) => (
-              <TouchableOpacity
-                key={s}
-                style={[
-                  styles.segment,
-                  sensitivity === s && styles.segmentActive,
-                ]}
-                onPress={() => setSensitivity(s)}
-              >
-                <Text
-                  style={[
-                    styles.segmentText,
-                    sensitivity === s && styles.segmentTextActive,
-                  ]}
-                >
-                  {s === 'low' ? 'Rendah' : s === 'medium' ? 'Sedang' : 'Tinggi'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        {/* Mode */}
-        <View style={styles.settingRow}>
-          <Text style={styles.settingLabel}>Mode Overlay</Text>
-          <Switch
-            value={useOverlay}
-            onValueChange={setUseOverlay}
-            trackColor={{ true: colors.primary }}
-            thumbColor={colors.text}
+        {/* Bottom toolbar */}
+        <View
+          style={{
+            flexDirection: 'row',
+            backgroundColor: colors.bgElevated,
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+            paddingHorizontal: spacing.sm,
+          }}
+        >
+          <ToolbarButton
+            icon={<TextCursorInput size={20} color={colors.text} strokeWidth={1.75} />}
+            label={`Size · ${fontSize}px`}
+            onPress={() => setOpenPicker('size')}
+          />
+          <ToolbarButton
+            icon={<Gauge size={20} color={colors.text} strokeWidth={1.75} />}
+            label={`Speed · ${wpm}wpm`}
+            onPress={() => setOpenPicker('speed')}
+          />
+          <ToolbarButton
+            icon={<Languages size={20} color={colors.text} strokeWidth={1.75} />}
+            label={`Lang · ${language === 'id-ID' ? 'ID' : language.split('-')[0].toUpperCase()}`}
+            onPress={() => setOpenPicker('lang')}
           />
         </View>
+      </KeyboardAvoidingView>
 
-        <TouchableOpacity
-          style={[styles.startBtn, !content.trim() && styles.startBtnDisabled]}
-          onPress={handleStart}
-          disabled={!content.trim()}
-        >
-          <Text style={styles.startBtnText}>🎙  KALIBRASI & MULAI</Text>
-        </TouchableOpacity>
-      </View>
-    </ScrollView>
+      <PickerModal
+        visible={openPicker === 'size'}
+        title="Font Size"
+        options={FONT_SIZES.map((s) => ({ value: s, label: `${s}px` }))}
+        selectedValue={fontSize}
+        onSelect={(v) => setFontSize(v as number)}
+        onClose={() => setOpenPicker(null)}
+      />
+      <PickerModal
+        visible={openPicker === 'speed'}
+        title="Reading Speed"
+        options={SPEED_PRESETS.map((p) => ({
+          value: p.wpm,
+          label: p.label,
+          sub: `${p.wpm} words per minute`,
+        }))}
+        selectedValue={wpm}
+        onSelect={(v) => setWpm(v as number)}
+        onClose={() => setOpenPicker(null)}
+      />
+      <PickerModal
+        visible={openPicker === 'lang'}
+        title="Language"
+        options={SUPPORTED_LANGUAGES.map((l) => ({ value: l.bcp47, label: l.label }))}
+        selectedValue={language}
+        onSelect={(v) => setLanguage(v as string)}
+        onClose={() => setOpenPicker(null)}
+      />
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  inner: { padding: 16, gap: 16 },
-  titleInput: {
-    color: colors.text,
-    fontSize: 20,
-    fontWeight: '600',
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    paddingBottom: 8,
-  },
-  contentInput: {
-    color: colors.text,
-    fontSize: 16,
-    lineHeight: 24,
-    minHeight: 180,
-    backgroundColor: colors.surface,
-    borderRadius: 10,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  infoLabel: { color: colors.text, fontSize: 15 },
-  infoValue: { color: colors.primary, fontSize: 15 },
-  langPicker: {
-    backgroundColor: colors.surfaceElevated,
-    borderRadius: 10,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  langOption: { padding: 14 },
-  langOptionActive: { backgroundColor: colors.primaryDim },
-  langOptionText: { color: colors.textSecondary, fontSize: 15 },
-  langOptionTextActive: { color: colors.primary, fontWeight: '600' },
-  estimate: { color: colors.textSecondary, fontSize: 13 },
-  settingRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  settingLabel: { color: colors.text, fontSize: 15 },
-  settingValue: { color: colors.textSecondary, fontSize: 15, minWidth: 48, textAlign: 'center' },
-  stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  stepper: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  stepperText: { color: colors.text, fontSize: 20 },
-  segmentedControl: {
-    flexDirection: 'row',
-    backgroundColor: colors.surface,
-    borderRadius: 8,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  segment: { paddingHorizontal: 12, paddingVertical: 8 },
-  segmentActive: { backgroundColor: colors.primary },
-  segmentText: { color: colors.textSecondary, fontSize: 13 },
-  segmentTextActive: { color: colors.text, fontWeight: '600' },
-  startBtn: {
-    backgroundColor: colors.primary,
-    borderRadius: 14,
-    padding: 18,
-    alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 32,
-  },
-  startBtnDisabled: { opacity: 0.4 },
-  startBtnText: { color: colors.text, fontSize: 17, fontWeight: '700' },
-  errorText: { color: colors.danger, textAlign: 'center', marginTop: 40 },
-});
