@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, Pressable, ScrollView, Alert, Modal } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import {
   PictureInPicture2,
   Info,
@@ -266,6 +266,29 @@ export default function OverlayTab() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [overlayActive, setOverlayActive] = useState(false);
   const [activeScript, setActiveScript] = useState<Script | null>(null);
+
+  // Sync state when user returns to this tab — handles the case where they
+  // dismissed the overlay (or system did) while the app was in the background.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        try {
+          const shown = await TeleprompterOverlay.isShown();
+          if (cancelled) return;
+          if (!shown && overlayActive) {
+            setOverlayActive(false);
+            setActiveScript(null);
+          }
+        } catch {
+          // module not linked; ignore
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [overlayActive])
+  );
 
   return (
     <Screen>

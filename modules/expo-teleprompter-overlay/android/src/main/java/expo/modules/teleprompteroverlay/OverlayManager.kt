@@ -5,6 +5,8 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
@@ -54,6 +56,11 @@ class OverlayManager(
   private var isPaused = false
   private var scrollMode = "voice"
   private var speedLabel = "140"
+  private var wpm = 140
+
+  // Native auto-scroll timer (runs in main looper, survives JS background pause)
+  private val autoHandler = Handler(Looper.getMainLooper())
+  private var autoTask: Runnable? = null
 
   private val density: Float
     get() = context.resources.displayMetrics.density
@@ -82,10 +89,12 @@ class OverlayManager(
     speedLabel = initialSpeedLabel
 
     if (rootView != null) {
+      // Already shown — reuse existing window, just update state.
       setText(text)
       setScrollMode(initialScrollMode)
       setPaused(initialPaused)
       setSpeedLabel(initialSpeedLabel)
+      syncAutoScrollState()
       return
     }
 
@@ -96,11 +105,13 @@ class OverlayManager(
       setBackgroundColor(applyAlpha(backgroundColor, opacity))
     }
 
+    // ScrollView occupies content area between top handle and bottom controls.
+    // Use FrameLayout margins instead of internal padding so that text never
+    // renders under the drag handle or control bar.
     val sv = ScrollView(context).apply {
       isVerticalScrollBarEnabled = false
       overScrollMode = View.OVER_SCROLL_NEVER
-      setPadding(0, topHandleHeight(), 0, bottomControlsHeight())
-      clipToPadding = false
+      clipToPadding = true
     }
 
     val tv = TextView(context).apply {
@@ -122,7 +133,10 @@ class OverlayManager(
       FrameLayout.LayoutParams(
         FrameLayout.LayoutParams.MATCH_PARENT,
         FrameLayout.LayoutParams.MATCH_PARENT
-      )
+      ).apply {
+        topMargin = topHandleHeight()
+        bottomMargin = bottomControlsHeight()
+      }
     )
 
     val readingLine = View(context).apply {
@@ -169,28 +183,31 @@ class OverlayManager(
       }
     )
 
+    // Buttons toggle native state LOCALLY first, then notify JS for sync.
+    // This way the action feels instant even if JS thread is paused (e.g. when
+    // host activity is in background) and avoids waking the host activity.
     val modeBtn = makeControlButton(modeIcon(), "Ubah mode scroll") {
-      onControlPressed("toggleMode")
+      handleToggleMode()
     }
     val pauseBtn = makeControlButton(pauseIcon(), "Pause atau lanjut") {
-      onControlPressed("togglePause")
+      handleTogglePause()
     }
     modeButton = modeBtn
     pauseButton = pauseBtn
 
     controls.addView(modeBtn)
     controls.addView(makeControlButton(R.drawable.ic_overlay_minus, "Perlambat") {
-      onControlPressed("slower")
+      handleSlower()
     })
     controls.addView(pauseBtn)
     controls.addView(makeControlButton(R.drawable.ic_overlay_plus, "Percepat") {
-      onControlPressed("faster")
+      handleFaster()
     })
     controls.addView(makeControlButton(R.drawable.ic_overlay_restart, "Mulai ulang") {
-      onControlPressed("restart")
+      handleRestart()
     })
     controls.addView(makeControlButton(R.drawable.ic_overlay_close, "Tutup overlay") {
-      onControlPressed("close")
+      handleClose()
     })
 
     val rightResize = makeResizeHandle(R.drawable.ic_overlay_resize_width, "Resize horizontal")
@@ -269,8 +286,15 @@ class OverlayManager(
     textView = tv
     layoutParams = params
 
+    wpm = initialSpeedLabel.toIntOrNull() ?: 140
+
     updateContentGeometry(initialHeight)
     setText(text)
+
+    // Kick off auto-scroll right away if launched into auto mode.
+    if (scrollMode == "auto" && !isPaused) {
+      startAutoScrollTimer()
+    }
   }
 
   fun setText(text: String) {
@@ -290,16 +314,110 @@ class OverlayManager(
   fun setPaused(paused: Boolean) {
     isPaused = paused
     pauseButton?.setImageResource(pauseIcon())
+    syncAutoScrollState()
   }
 
   fun setScrollMode(mode: String) {
     scrollMode = mode
     modeButton?.setImageResource(modeIcon())
+    syncAutoScrollState()
   }
 
   fun setSpeedLabel(label: String) {
     speedLabel = label
+    label.toIntOrNull()?.let { wpm = max(40, min(400, it)) }
     modeButton?.setImageResource(modeIcon())
+    if (scrollMode == "auto" && !isPaused && autoTask != null) {
+      startAutoScrollTimer() // restart with new interval
+    }
+  }
+
+  fun setWpm(value: Int) {
+    wpm = max(40, min(400, value))
+    speedLabel = wpm.toString()
+    modeButton?.setImageResource(modeIcon())
+    if (scrollMode == "auto" && !isPaused && autoTask != null) {
+      startAutoScrollTimer()
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Native action handlers — invoked from button taps. These mutate state
+  // locally so the overlay responds instantly without waiting for JS, then
+  // emit an event so JS can mirror state in its store.
+  // ---------------------------------------------------------------------------
+
+  private fun handleToggleMode() {
+    scrollMode = if (scrollMode == "auto") "voice" else "auto"
+    modeButton?.setImageResource(modeIcon())
+    syncAutoScrollState()
+    onControlPressed("toggleMode")
+  }
+
+  private fun handleTogglePause() {
+    isPaused = !isPaused
+    pauseButton?.setImageResource(pauseIcon())
+    syncAutoScrollState()
+    onControlPressed("togglePause")
+  }
+
+  private fun handleSlower() {
+    setWpm(wpm - 20)
+    onControlPressed("slower")
+  }
+
+  private fun handleFaster() {
+    setWpm(wpm + 20)
+    onControlPressed("faster")
+  }
+
+  private fun handleRestart() {
+    currentWordIndex = -1
+    renderHighlightedText()
+    scrollView?.scrollTo(0, 0)
+    syncAutoScrollState()
+    onControlPressed("restart")
+  }
+
+  private fun handleClose() {
+    stopAutoScrollTimer()
+    onControlPressed("close")
+  }
+
+  // ---------------------------------------------------------------------------
+  // Native auto-scroll timer — runs on main looper so it survives JS thread
+  // throttling when host activity is paused. Increments currentWordIndex at
+  // a cadence derived from wpm (defaults to 140 wpm = ~430ms/word).
+  // ---------------------------------------------------------------------------
+
+  private fun startAutoScrollTimer() {
+    stopAutoScrollTimer()
+    val intervalMs = max(80L, 60_000L / max(40, wpm).toLong())
+    val task = object : Runnable {
+      override fun run() {
+        if (!isPaused && scrollMode == "auto" && currentWordIndex + 1 < wordRanges.size) {
+          currentWordIndex += 1
+          renderHighlightedText()
+          scrollToCurrentWord()
+        }
+        autoHandler.postDelayed(this, intervalMs)
+      }
+    }
+    autoTask = task
+    autoHandler.postDelayed(task, intervalMs)
+  }
+
+  private fun stopAutoScrollTimer() {
+    autoTask?.let { autoHandler.removeCallbacks(it) }
+    autoTask = null
+  }
+
+  private fun syncAutoScrollState() {
+    if (scrollMode == "auto" && !isPaused) {
+      startAutoScrollTimer()
+    } else {
+      stopAutoScrollTimer()
+    }
   }
 
   fun setScrollPosition(y: Float) {
@@ -311,6 +429,7 @@ class OverlayManager(
   }
 
   fun hide() {
+    stopAutoScrollTimer()
     val v = rootView ?: return
     try {
       windowManager.removeView(v)
@@ -434,10 +553,14 @@ class OverlayManager(
       return
     }
 
+    // Reading line is at 30% of CONTENT area (between handle and controls),
+    // not 30% of root, so the math stays correct on small overlays.
+    val contentHeight = max(0, root.height - topHandleHeight() - bottomControlsHeight())
+    val readingOffset = (contentHeight * 0.30f).toInt()
+
     val start = wordRanges[currentWordIndex].start
     val line = layout.getLineForOffset(start)
     val lineTop = layout.getLineTop(line)
-    val readingOffset = (root.height * 0.42f).toInt()
     sv.scrollTo(0, max(0, lineTop - readingOffset))
   }
 
@@ -538,18 +661,37 @@ class OverlayManager(
     }
   }
 
+  /**
+   * Recalculates layout-dependent values whenever overlay height changes.
+   *
+   * Goals:
+   *  - Top of script ALWAYS sits at the top of the content area (small fixed
+   *    padding), no matter how tall the overlay is — so first word stays
+   *    visible from the start.
+   *  - Reading line sits at 30% of the *content* area (between handle and
+   *    controls), giving roughly 1/3 already-read context above and 2/3
+   *    upcoming text below the focus line.
+   *  - Bottom padding is large enough that the LAST line of the script can
+   *    still scroll up to the reading line.
+   *  - Side padding stays comfortable for reading.
+   */
   private fun updateContentGeometry(height: Int) {
     val tv = textView ?: return
     val line = readingLineView
-    val topPadding = (height * 0.42f).toInt()
-    val bottomPadding = (height * 0.34f).toInt()
-    val sidePadding = dpToPx(28f)
+    val contentHeight = max(0, height - topHandleHeight() - bottomControlsHeight())
+
+    val topPadding = dpToPx(16f) // small constant — top of script stays at top
+    val readingOffset = (contentHeight * 0.30f).toInt()
+    // Bottom padding: empty space below script so last line can reach reading line.
+    val bottomPadding = max(dpToPx(16f), contentHeight - readingOffset - dpToPx(16f))
+    val sidePadding = dpToPx(24f)
 
     tv.setPadding(sidePadding, topPadding, sidePadding, bottomPadding)
 
     val lp = line?.layoutParams as? FrameLayout.LayoutParams
     if (lp != null) {
-      lp.topMargin = topPadding + topHandleHeight()
+      // Reading line sits relative to the *container*, so add top handle offset.
+      lp.topMargin = topHandleHeight() + readingOffset
       line.layoutParams = lp
     }
 
