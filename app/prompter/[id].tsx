@@ -222,7 +222,7 @@ export default function PrompterScreen() {
         pointerEvents="none"
       />
 
-      {/* Controls */}
+      {/* Controls — glass pill */}
       <View
         style={{
           position: 'absolute',
@@ -232,11 +232,16 @@ export default function PrompterScreen() {
           flexDirection: 'row',
           justifyContent: 'space-between',
           alignItems: 'center',
-          backgroundColor: 'rgba(0,0,0,0.55)',
-          borderRadius: radius.xl,
+          backgroundColor: colors.glass,
+          borderRadius: radius.pill,
           padding: spacing.sm,
           borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.08)',
+          borderColor: colors.glassBorder,
+          shadowColor: '#000',
+          shadowOpacity: 0.4,
+          shadowRadius: 18,
+          shadowOffset: { width: 0, height: 8 },
+          elevation: 12,
         }}
       >
         <Pressable

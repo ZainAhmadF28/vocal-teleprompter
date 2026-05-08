@@ -29,6 +29,7 @@ export interface OverlayEvents {
   controlPressed: (event: { action: OverlayControlAction }) => void;
   positionChanged: (pos: { x: number; y: number }) => void;
   sizeChanged: (size: { width: number; height: number }) => void;
+  indexChanged: (event: { index: number }) => void;
 }
 
 interface NativeOverlayModule {

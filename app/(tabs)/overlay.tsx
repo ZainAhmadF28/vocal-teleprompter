@@ -44,7 +44,7 @@ function FloatingOverlaySession({
   const setMode = usePrompterStore((s) => s.setMode);
   const setActiveScript = usePrompterStore((s) => s.setActiveScript);
 
-  const { startSession, stopSession, restartSession } = usePrompterEngine(script.content);
+  const { startSession, stopSession, restartSession, seekToWord } = usePrompterEngine(script.content);
 
   useEffect(() => {
     setMode('overlay');
@@ -58,8 +58,14 @@ function FloatingOverlaySession({
   }, [script.content, script.id, setActiveScript, setMode, startSession, stopSession]);
 
   useEffect(() => {
-    TeleprompterOverlay.setCurrentWordIndex(currentWordIndex);
-  }, [currentWordIndex]);
+    // Push JS index to native ONLY in voice mode. In auto mode the native
+    // overlay owns the index (background-safe Handler timer) and JS just
+    // mirrors via the 'indexChanged' event. Pushing here would overwrite
+    // native's advance and cause the "mental-mental" jumping the user saw.
+    if (scrollMode === 'voice') {
+      TeleprompterOverlay.setCurrentWordIndex(currentWordIndex);
+    }
+  }, [currentWordIndex, scrollMode]);
 
   useEffect(() => {
     TeleprompterOverlay.setPaused(isPaused);
@@ -84,15 +90,22 @@ function FloatingOverlaySession({
             await TeleprompterOverlay.hide();
             onClose();
             break;
-          case 'toggleMode':
-            setScrollMode(scrollMode === 'auto' ? 'voice' : 'auto');
+          case 'toggleMode': {
+            // Read fresh state — closure can be stale after rapid taps
+            const cur = useSettingsStore.getState().scrollMode;
+            setScrollMode(cur === 'auto' ? 'voice' : 'auto');
             break;
-          case 'slower':
-            setScrollWPM(Math.max(60, scrollWPM - 10));
+          }
+          case 'slower': {
+            const cur = useSettingsStore.getState().scrollWPM;
+            setScrollWPM(Math.max(60, cur - 10));
             break;
-          case 'faster':
-            setScrollWPM(Math.min(250, scrollWPM + 10));
+          }
+          case 'faster': {
+            const cur = useSettingsStore.getState().scrollWPM;
+            setScrollWPM(Math.min(250, cur + 10));
             break;
+          }
         }
       }),
       TeleprompterOverlay.addListener('sizeChanged', (size) => {
@@ -100,6 +113,12 @@ function FloatingOverlaySession({
           width: Math.max(260, Math.round(size.width)),
           height: Math.max(170, Math.round(size.height)),
         });
+      }),
+      // Native auto-scroll advances index in background. We mirror it into
+      // JS state so matcher stays in sync (otherwise toggling back to voice
+      // would have a stale matcher index and STT wouldn't match anything).
+      TeleprompterOverlay.addListener('indexChanged', ({ index }) => {
+        seekToWord(index);
       }),
     ];
 
@@ -109,8 +128,7 @@ function FloatingOverlaySession({
     pause,
     restartSession,
     resume,
-    scrollMode,
-    scrollWPM,
+    seekToWord,
     setOverlayDefaultSize,
     setScrollMode,
     setScrollWPM,
@@ -302,21 +320,41 @@ export default function OverlayTab() {
         />
       ) : null}
 
-      <Header
-        title="Overlay"
-        right={
-          <IconButton
-            icon={<SettingsIcon size={20} color={colors.text} strokeWidth={1.75} />}
-            onPress={() => router.push('/settings')}
-          />
-        }
-      />
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: spacing.lg,
+          paddingTop: spacing.lg,
+          paddingBottom: 120,
+          gap: spacing.lg,
+        }}
+      >
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+          <Pressable
+            onPress={() => router.push('/settings' as any)}
+            style={({ pressed }) => [
+              {
+                width: 40,
+                height: 40,
+                borderRadius: radius.pill,
+                backgroundColor: colors.bgElevated,
+                borderWidth: 1,
+                borderColor: colors.border,
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: pressed ? 0.7 : 1,
+              },
+            ]}
+          >
+            <SettingsIcon size={20} color={colors.text} strokeWidth={1.75} />
+          </Pressable>
+        </View>
 
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg, paddingBottom: spacing.xxxl }}>
-        <View style={{ gap: spacing.xs }}>
-          <Text style={[typography.h1, { color: colors.text }]}>Overlay Configuration</Text>
-          <Text style={[typography.body, { color: colors.textSecondary }]}>
-            Customize your floating prompter appearance.
+        <View style={{ gap: spacing.sm }}>
+          <Text style={[typography.displayXL, { color: colors.text }]}>
+            Floating{'\n'}Overlay
+          </Text>
+          <Text style={[typography.body, { color: colors.textSecondary, maxWidth: 320 }]}>
+            Atur tampilan window prompter yang ngambang di atas app lain.
           </Text>
         </View>
 

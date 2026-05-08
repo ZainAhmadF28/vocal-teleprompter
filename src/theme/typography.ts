@@ -11,6 +11,8 @@ export const fontFamily = Platform.select({
 });
 
 export type TypographyScale = {
+  /** Hero / Greeting — gigantic, very bold, tight tracking. v2 morphism style. */
+  displayXL: TextStyle;
   display: TextStyle;
   h1: TextStyle;
   h2: TextStyle;
@@ -21,6 +23,12 @@ export type TypographyScale = {
 };
 
 export const typography: TypographyScale = {
+  displayXL: {
+    fontSize: 40,
+    fontWeight: '800',
+    lineHeight: 46,
+    letterSpacing: -1.2,
+  },
   display: {
     fontSize: 32,
     fontWeight: '700',

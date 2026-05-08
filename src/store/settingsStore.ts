@@ -15,6 +15,7 @@ interface SettingsState {
   scrollWPM: number; // target reading pace (Words Per Minute)
   micSource: 'internal' | 'external'; // mic input source
   noiseCancellation: boolean;
+  noiseFilterLevel: 'off' | 'medium' | 'aggressive';
   bluetoothMicEnabled: boolean;
   voiceCommandsEnabled: boolean;
   overlayDefaultSize: { width: number; height: number };
@@ -31,6 +32,7 @@ interface SettingsState {
   setScrollWPM: (v: number) => void;
   setMicSource: (s: SettingsState['micSource']) => void;
   setNoiseCancellation: (v: boolean) => void;
+  setNoiseFilterLevel: (v: SettingsState['noiseFilterLevel']) => void;
   setBluetoothMicEnabled: (v: boolean) => void;
   setVoiceCommandsEnabled: (v: boolean) => void;
   setOverlayDefaultSize: (size: { width: number; height: number }) => void;
@@ -51,6 +53,7 @@ export const useSettingsStore = create<SettingsState>()(
       scrollWPM: 140,
       micSource: 'internal',
       noiseCancellation: true,
+      noiseFilterLevel: 'medium',
       bluetoothMicEnabled: true,
       voiceCommandsEnabled: true,
       overlayDefaultSize: { width: 400, height: 200 },
@@ -67,6 +70,7 @@ export const useSettingsStore = create<SettingsState>()(
       setScrollWPM: (v) => set({ scrollWPM: v }),
       setMicSource: (s) => set({ micSource: s }),
       setNoiseCancellation: (v) => set({ noiseCancellation: v }),
+      setNoiseFilterLevel: (v) => set({ noiseFilterLevel: v }),
       setBluetoothMicEnabled: (v) => set({ bluetoothMicEnabled: v }),
       setVoiceCommandsEnabled: (v) => set({ voiceCommandsEnabled: v }),
       setOverlayDefaultSize: (size) => set({ overlayDefaultSize: size }),

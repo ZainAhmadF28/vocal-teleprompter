@@ -1,14 +1,32 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, FlatList, Pressable, Alert, TextInput } from 'react-native';
+import {
+  View,
+  Text,
+  FlatList,
+  Pressable,
+  Alert,
+  TextInput,
+  Modal,
+} from 'react-native';
 import { router } from 'expo-router';
-import { Plus, FileText, Search, Menu, X, Settings as SettingsIcon, Image as ImageIcon, Layers, Info } from 'lucide-react-native';
+import {
+  Plus,
+  FileText,
+  Search,
+  X,
+  Settings as SettingsIcon,
+  Image as ImageIcon,
+  Layers,
+  Info,
+  Video,
+  Sparkles,
+  HelpCircle,
+} from 'lucide-react-native';
 import { useScriptsStore, type Script } from '@/store/scriptsStore';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Screen } from '@/ui/components/Screen';
-import { Header } from '@/ui/components/Header';
-import { Card } from '@/ui/components/Card';
 import { IconButton } from '@/ui/components/IconButton';
-import { Modal } from 'react-native';
+import { TintedCard, type TintVariant } from '@/ui/components/TintedCard';
 
 function formatRelativeDate(ts: number): string {
   const now = new Date();
@@ -27,12 +45,48 @@ function wordCountLabel(text: string): string {
   return `${count} words`;
 }
 
+interface QuickAction {
+  label: string;
+  sub: string;
+  Icon: React.ComponentType<any>;
+  tint: TintVariant;
+  onPress: () => void;
+}
+
+function QuickActionTile({ action }: { action: QuickAction }) {
+  const { colors, typography, spacing, radius } = useTheme();
+  const tint = colors.tints[action.tint];
+  return (
+    <TintedCard tint={action.tint} onPress={action.onPress} style={{ flex: 1, gap: spacing.md, minHeight: 130 }}>
+      <View
+        style={{
+          width: 44,
+          height: 44,
+          borderRadius: radius.md,
+          backgroundColor: colors.bgElevated,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <action.Icon size={22} color={tint.icon} strokeWidth={1.75} />
+      </View>
+      <View style={{ gap: 2 }}>
+        <Text style={[typography.bodyEmph, { color: colors.text, fontWeight: '700' }]} numberOfLines={1}>
+          {action.label}
+        </Text>
+        <Text style={[typography.caption, { color: colors.textSecondary }]} numberOfLines={1}>
+          {action.sub}
+        </Text>
+      </View>
+    </TintedCard>
+  );
+}
+
 function ScriptListItem({ script }: { script: Script }) {
   const { colors, typography, spacing, radius } = useTheme();
   const deleteScript = useScriptsStore((s) => s.deleteScript);
 
   const handlePress = () => router.push(`/editor/${script.id}`);
-
   const handleLongPress = () => {
     Alert.alert('Delete Script', `Delete "${script.title}"?`, [
       { text: 'Cancel', style: 'cancel' },
@@ -46,72 +100,38 @@ function ScriptListItem({ script }: { script: Script }) {
       onLongPress={handleLongPress}
       style={({ pressed }) => [
         {
-          backgroundColor: pressed ? colors.bgSubtle : colors.bgElevated,
+          backgroundColor: colors.bgElevated,
           borderRadius: radius.lg,
           borderWidth: 1,
           borderColor: colors.border,
           padding: spacing.lg,
-          gap: spacing.sm,
-        },
-      ]}
-    >
-      <View
-        style={{
-          width: 36,
-          height: 36,
-          borderRadius: 8,
-          backgroundColor: colors.bgSubtle,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <FileText size={18} color={colors.textSecondary} strokeWidth={1.75} />
-      </View>
-      <Text style={[typography.bodyEmph, { color: colors.text, marginTop: spacing.sm }]} numberOfLines={2}>
-        {script.title}
-      </Text>
-      <Text style={[typography.caption, { color: colors.textSecondary }]} numberOfLines={1}>
-        {wordCountLabel(script.content)}  ·  {script.language === 'id-ID' ? 'Indonesian' : 'English'}  ·  {formatRelativeDate(script.updatedAt)}
-      </Text>
-    </Pressable>
-  );
-}
-
-function NewScriptHero({ onPress }: { onPress: () => void }) {
-  const { colors, typography, spacing, radius } = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        {
-          backgroundColor: pressed ? colors.bgSubtle : colors.bgElevated,
-          borderRadius: radius.lg,
-          borderWidth: 1,
-          borderColor: colors.border,
-          padding: spacing.xxl,
-          alignItems: 'center',
-          justifyContent: 'center',
+          flexDirection: 'row',
           gap: spacing.md,
-          minHeight: 200,
+          alignItems: 'center',
+          opacity: pressed ? 0.85 : 1,
         },
       ]}
     >
       <View
         style={{
-          width: 56,
-          height: 56,
-          borderRadius: radius.pill,
+          width: 44,
+          height: 44,
+          borderRadius: radius.md,
           backgroundColor: colors.accentSubtle,
           alignItems: 'center',
           justifyContent: 'center',
         }}
       >
-        <Plus size={28} color={colors.accent} strokeWidth={2} />
+        <FileText size={20} color={colors.accent} strokeWidth={1.75} />
       </View>
-      <Text style={[typography.h2, { color: colors.text }]}>New Script</Text>
-      <Text style={[typography.caption, { color: colors.textSecondary, textAlign: 'center' }]}>
-        Start from scratch or import
-      </Text>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={[typography.bodyEmph, { color: colors.text }]} numberOfLines={1}>
+          {script.title}
+        </Text>
+        <Text style={[typography.caption, { color: colors.textSecondary }]} numberOfLines={1}>
+          {wordCountLabel(script.content)}  ·  {script.language === 'id-ID' ? 'ID' : 'EN'}  ·  {formatRelativeDate(script.updatedAt)}
+        </Text>
+      </View>
     </Pressable>
   );
 }
@@ -125,30 +145,9 @@ function MenuSheet({
 }) {
   const { colors, typography, spacing, radius } = useTheme();
   const items = [
-    {
-      label: 'Settings',
-      Icon: SettingsIcon,
-      onPress: () => {
-        onClose();
-        router.push('/settings' as any);
-      },
-    },
-    {
-      label: 'Recordings',
-      Icon: ImageIcon,
-      onPress: () => {
-        onClose();
-        router.push('/gallery' as any);
-      },
-    },
-    {
-      label: 'Floating Overlay',
-      Icon: Layers,
-      onPress: () => {
-        onClose();
-        router.push('/overlay' as any);
-      },
-    },
+    { label: 'Settings', Icon: SettingsIcon, onPress: () => { onClose(); router.push('/settings' as any); } },
+    { label: 'Recordings', Icon: ImageIcon, onPress: () => { onClose(); router.push('/gallery' as any); } },
+    { label: 'Floating Overlay', Icon: Layers, onPress: () => { onClose(); router.push('/overlay' as any); } },
     {
       label: 'About',
       Icon: Info,
@@ -168,14 +167,16 @@ function MenuSheet({
             top: 60,
             left: 16,
             backgroundColor: colors.bgElevated,
-            borderRadius: radius.lg,
+            borderRadius: radius.xl,
             borderWidth: 1,
             borderColor: colors.border,
             paddingVertical: spacing.sm,
-            minWidth: 220,
+            minWidth: 240,
             shadowColor: '#000',
             shadowOpacity: 0.4,
-            shadowRadius: 14,
+            shadowRadius: 18,
+            shadowOffset: { width: 0, height: 8 },
+            elevation: 12,
           }}
         >
           {items.map((it, i) => (
@@ -228,86 +229,142 @@ export default function ScriptsTab() {
     );
   }, [scripts, query]);
 
-  return (
-    <Screen>
-      <Header
-        title="Scripts"
-        left={
-          <IconButton
-            icon={<Menu size={22} color={colors.text} strokeWidth={1.75} />}
-            onPress={() => setMenuOpen(true)}
-          />
-        }
-        right={
-          <IconButton
-            icon={
-              searchOpen ? (
-                <X size={22} color={colors.text} strokeWidth={1.75} />
-              ) : (
-                <Search size={22} color={colors.text} strokeWidth={1.75} />
-              )
-            }
-            onPress={() => {
-              if (searchOpen) {
-                setQuery('');
-                setSearchOpen(false);
-              } else {
-                setSearchOpen(true);
-              }
-            }}
-          />
-        }
-      />
+  const quickActions: QuickAction[] = [
+    { label: 'New Script', sub: 'Start fresh', Icon: Plus, tint: 'blue', onPress: handleNewScript },
+    { label: 'Camera Studio', sub: 'Record video', Icon: Video, tint: 'orange', onPress: () => router.push('/studio' as any) },
+    { label: 'Floating', sub: 'Over other apps', Icon: Layers, tint: 'green', onPress: () => router.push('/overlay' as any) },
+    { label: 'Recordings', sub: 'Saved videos', Icon: Sparkles, tint: 'pink', onPress: () => router.push('/gallery' as any) },
+  ];
 
+  const ListHeader = (
+    <View style={{ gap: spacing.xl, paddingBottom: spacing.lg }}>
+      {/* Top icon row */}
+      <View
+        style={{
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <Pressable
+          onPress={() => setMenuOpen(true)}
+          style={({ pressed }) => [
+            {
+              width: 40,
+              height: 40,
+              borderRadius: radius.pill,
+              backgroundColor: colors.bgElevated,
+              borderWidth: 1,
+              borderColor: colors.border,
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: pressed ? 0.7 : 1,
+            },
+          ]}
+        >
+          <HelpCircle size={20} color={colors.text} strokeWidth={1.75} />
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            if (searchOpen) {
+              setQuery('');
+              setSearchOpen(false);
+            } else {
+              setSearchOpen(true);
+            }
+          }}
+          style={({ pressed }) => [
+            {
+              width: 40,
+              height: 40,
+              borderRadius: radius.pill,
+              backgroundColor: colors.bgElevated,
+              borderWidth: 1,
+              borderColor: colors.border,
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: pressed ? 0.7 : 1,
+            },
+          ]}
+        >
+          {searchOpen ? (
+            <X size={20} color={colors.text} strokeWidth={1.75} />
+          ) : (
+            <Search size={20} color={colors.text} strokeWidth={1.75} />
+          )}
+        </Pressable>
+      </View>
+
+      {/* Hero */}
+      <View style={{ gap: spacing.xs }}>
+        <Text style={[typography.displayXL, { color: colors.text }]}>
+          Hi,{'\n'}what's on{'\n'}your script today?
+        </Text>
+      </View>
+
+      {/* Search field (when open) */}
       {searchOpen && (
         <View
           style={{
-            paddingHorizontal: spacing.lg,
-            paddingVertical: spacing.sm,
-            borderBottomWidth: 1,
-            borderBottomColor: colors.border,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: spacing.sm,
+            backgroundColor: colors.bgElevated,
+            borderRadius: radius.lg,
+            paddingHorizontal: spacing.md,
+            paddingVertical: spacing.md,
+            borderWidth: 1,
+            borderColor: colors.border,
           }}
         >
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: spacing.sm,
-              backgroundColor: colors.bgSubtle,
-              borderRadius: radius.md,
-              paddingHorizontal: spacing.md,
-              paddingVertical: spacing.sm,
-              borderWidth: 1,
-              borderColor: colors.border,
-            }}
-          >
-            <Search size={16} color={colors.textTertiary} strokeWidth={1.75} />
-            <TextInput
-              autoFocus
-              value={query}
-              onChangeText={setQuery}
-              placeholder="Search scripts by title or content"
-              placeholderTextColor={colors.textTertiary}
-              style={{
-                flex: 1,
-                color: colors.text,
-                fontSize: 15,
-                padding: 0,
-              }}
-            />
-            {query.length > 0 && (
-              <Pressable onPress={() => setQuery('')} hitSlop={8}>
-                <X size={16} color={colors.textTertiary} strokeWidth={1.75} />
-              </Pressable>
-            )}
-          </View>
+          <Search size={18} color={colors.textTertiary} strokeWidth={1.75} />
+          <TextInput
+            autoFocus
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search scripts"
+            placeholderTextColor={colors.textTertiary}
+            style={{ flex: 1, color: colors.text, fontSize: 15, padding: 0 }}
+          />
+          {query.length > 0 && (
+            <Pressable onPress={() => setQuery('')} hitSlop={8}>
+              <X size={16} color={colors.textTertiary} strokeWidth={1.75} />
+            </Pressable>
+          )}
         </View>
       )}
 
+      {/* 2x2 quick actions */}
+      <View style={{ gap: spacing.md }}>
+        <View style={{ flexDirection: 'row', gap: spacing.md }}>
+          <QuickActionTile action={quickActions[0]} />
+          <QuickActionTile action={quickActions[1]} />
+        </View>
+        <View style={{ flexDirection: 'row', gap: spacing.md }}>
+          <QuickActionTile action={quickActions[2]} />
+          <QuickActionTile action={quickActions[3]} />
+        </View>
+      </View>
+
+      {scripts.length > 0 && (
+        <Text
+          style={[
+            typography.micro,
+            { color: colors.textSecondary, marginTop: spacing.md, paddingHorizontal: spacing.xs },
+          ]}
+        >
+          YOUR SCRIPTS · {scripts.length}
+        </Text>
+      )}
+    </View>
+  );
+
+  return (
+    <Screen>
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.id}
-        ListHeaderComponent={!searchOpen ? <NewScriptHero onPress={handleNewScript} /> : null}
+        ListHeaderComponent={ListHeader}
         ListEmptyComponent={
           searchOpen && query.length > 0 ? (
             <View style={{ padding: spacing.xl, alignItems: 'center' }}>
@@ -319,9 +376,10 @@ export default function ScriptsTab() {
         }
         renderItem={({ item }) => <ScriptListItem script={item} />}
         contentContainerStyle={{
-          padding: spacing.lg,
+          paddingHorizontal: spacing.lg,
+          paddingTop: spacing.md,
+          paddingBottom: 120, // space for floating tab bar
           gap: spacing.md,
-          paddingBottom: spacing.xxxl,
         }}
         ItemSeparatorComponent={() => <View style={{ height: spacing.md }} />}
       />

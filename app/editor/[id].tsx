@@ -286,8 +286,8 @@ export default function EditorScreen() {
             placeholder="Untitled Script"
             placeholderTextColor={colors.textTertiary}
             style={[
-              typography.display,
-              { color: colors.text, paddingVertical: spacing.sm },
+              typography.displayXL,
+              { color: colors.text, paddingVertical: spacing.sm, fontSize: 36, lineHeight: 42 },
             ]}
           />
 

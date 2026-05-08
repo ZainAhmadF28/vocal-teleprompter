@@ -25,13 +25,14 @@ import { Screen } from '@/ui/components/Screen';
 import { Header } from '@/ui/components/Header';
 import { IconButton } from '@/ui/components/IconButton';
 import { Button } from '@/ui/components/Button';
+import { TintedCard, type TintVariant } from '@/ui/components/TintedCard';
 
 type Mode = 'fullscreen' | 'floating' | 'camera';
 
-const MODES: { id: Mode; label: string; Icon: any; description: string }[] = [
-  { id: 'fullscreen', label: 'Fullscreen', Icon: Maximize2, description: 'Standard view' },
-  { id: 'floating', label: 'Floating', Icon: Layers, description: 'Over other apps' },
-  { id: 'camera', label: 'Camera Studio', Icon: Video, description: 'Record video with prompter' },
+const MODES: { id: Mode; label: string; Icon: any; description: string; tint: TintVariant }[] = [
+  { id: 'fullscreen', label: 'Fullscreen', Icon: Maximize2, description: 'Standard view',           tint: 'blue'   },
+  { id: 'floating',   label: 'Floating',   Icon: Layers,    description: 'Over other apps',          tint: 'green'  },
+  { id: 'camera',     label: 'Camera',     Icon: Video,     description: 'Record video with prompter', tint: 'orange' },
 ];
 
 function ModeCard({
@@ -44,50 +45,45 @@ function ModeCard({
   onPress: () => void;
 }) {
   const { colors, typography, spacing, radius } = useTheme();
+  const tint = colors.tints[mode.tint];
   const { Icon } = mode;
   return (
-    <Pressable
+    <TintedCard
+      tint={mode.tint}
+      active={active}
       onPress={onPress}
-      style={({ pressed }) => [
-        {
-          flex: 1,
-          backgroundColor: active ? colors.accentSubtle : colors.bgElevated,
-          borderRadius: radius.lg,
-          borderWidth: active ? 1.5 : 1,
-          borderColor: active ? colors.accent : colors.border,
-          padding: spacing.lg,
-          minHeight: 130,
+      style={{ flex: 1, minHeight: 140, gap: spacing.md }}
+    >
+      <View
+        style={{
+          width: 48,
+          height: 48,
+          borderRadius: radius.md,
+          backgroundColor: colors.bgElevated,
           alignItems: 'center',
           justifyContent: 'center',
-          gap: spacing.sm,
-          opacity: pressed ? 0.85 : 1,
-        },
-      ]}
-    >
-      <Icon
-        size={28}
-        color={active ? colors.accent : colors.textSecondary}
-        strokeWidth={1.75}
-      />
-      <Text
-        style={[
-          typography.bodyEmph,
-          { color: active ? colors.accent : colors.text, textAlign: 'center' },
-        ]}
-        numberOfLines={1}
+        }}
       >
-        {mode.label}
-      </Text>
-      <Text
-        style={[
-          typography.caption,
-          { color: colors.textSecondary, textAlign: 'center' },
-        ]}
-        numberOfLines={1}
-      >
-        {mode.description}
-      </Text>
-    </Pressable>
+        <Icon size={24} color={tint.icon} strokeWidth={1.75} />
+      </View>
+      <View style={{ gap: 2 }}>
+        <Text
+          style={[
+            typography.bodyEmph,
+            { color: colors.text, fontWeight: '700' },
+          ]}
+          numberOfLines={1}
+        >
+          {mode.label}
+        </Text>
+        <Text
+          style={[typography.caption, { color: colors.textSecondary }]}
+          numberOfLines={1}
+        >
+          {mode.description}
+        </Text>
+      </View>
+    </TintedCard>
   );
 }
 

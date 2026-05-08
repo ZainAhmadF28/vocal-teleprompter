@@ -184,7 +184,15 @@ export function usePrompterEngine(scriptContent: string) {
     setListening(true);
 
     if (useSettingsStore.getState().scrollMode === 'auto') {
-      startAutoTimer();
+      // In overlay mode the native side runs its own background-safe auto
+      // timer (Handler.postDelayed). Running JS setInterval here too causes
+      // both to advance currentWordIndex and fight via push effects, which is
+      // the "mental-mental" jumping. Let native be authoritative; JS catches
+      // up via the 'indexChanged' event listener.
+      const isOverlayMode = usePrompterStore.getState().mode === 'overlay';
+      if (!isOverlayMode) {
+        startAutoTimer();
+      }
       return;
     }
 

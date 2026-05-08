@@ -39,7 +39,8 @@ class OverlayManager(
   private val context: Context,
   private val onControlPressed: (String) -> Unit,
   private val onPositionChanged: (Int, Int) -> Unit,
-  private val onSizeChanged: (Int, Int) -> Unit
+  private val onSizeChanged: (Int, Int) -> Unit,
+  private val onIndexChanged: (Int) -> Unit = {}
 ) {
 
   private var rootView: FrameLayout? = null
@@ -376,6 +377,7 @@ class OverlayManager(
     renderHighlightedText()
     scrollView?.scrollTo(0, 0)
     syncAutoScrollState()
+    onIndexChanged(currentWordIndex)
     onControlPressed("restart")
   }
 
@@ -399,6 +401,10 @@ class OverlayManager(
           currentWordIndex += 1
           renderHighlightedText()
           scrollToCurrentWord()
+          // Tell JS so its matcher state stays in sync — needed when user
+          // toggles back to voice mode mid-script. Idempotent if JS already
+          // mirrors via push effect.
+          onIndexChanged(currentWordIndex)
         }
         autoHandler.postDelayed(this, intervalMs)
       }

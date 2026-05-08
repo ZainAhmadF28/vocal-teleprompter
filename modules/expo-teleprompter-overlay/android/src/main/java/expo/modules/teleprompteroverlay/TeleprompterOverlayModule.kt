@@ -26,6 +26,9 @@ class TeleprompterOverlayModule : Module() {
       },
       onSizeChanged = { width, height ->
         sendEvent("sizeChanged", mapOf("width" to width, "height" to height))
+      },
+      onIndexChanged = { index ->
+        sendEvent("indexChanged", mapOf("index" to index))
       }
     )
   }
@@ -36,7 +39,8 @@ class TeleprompterOverlayModule : Module() {
     Events(
       "controlPressed",
       "positionChanged",
-      "sizeChanged"
+      "sizeChanged",
+      "indexChanged"
     )
 
     AsyncFunction("hasPermission") { ->
