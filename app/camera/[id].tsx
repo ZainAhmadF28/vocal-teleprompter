@@ -1,13 +1,21 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
 import {
   View,
   Text,
   Pressable,
   Dimensions,
   Alert,
-  ScrollView,
   ActivityIndicator,
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from 'react-native';
+import Animated, {
+  useAnimatedRef,
+  useSharedValue,
+  useAnimatedReaction,
+  scrollTo,
+} from 'react-native-reanimated';
 import { useLocalSearchParams, router } from 'expo-router';
 import {
   CameraView,
@@ -39,6 +47,57 @@ import { useTheme } from '@/theme/ThemeProvider';
 import { Button } from '@/ui/components/Button';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+type CameraWordStatus = 'pending' | 'current' | 'spoken';
+
+interface CameraWordProps {
+  index: number;
+  text: string;
+  status: CameraWordStatus;
+  fontSize: number;
+  lineHeight: number;
+  accentColor: string;
+  onLayout: (idx: number, y: number) => void;
+}
+
+const CameraWord = memo(function CameraWord({
+  index,
+  text,
+  status,
+  fontSize,
+  lineHeight,
+  accentColor,
+  onLayout,
+}: CameraWordProps) {
+  const handleLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      onLayout(index, e.nativeEvent.layout.y);
+    },
+    [index, onLayout]
+  );
+  const color =
+    status === 'current'
+      ? accentColor
+      : status === 'spoken'
+      ? 'rgba(255,255,255,0.4)'
+      : '#FFFFFF';
+  // Font weight konstan — kalau current di-bold, lebar text berubah →
+  // flexWrap reflow → seluruh layout loncat. Highlight pakai warna saja.
+  return (
+    <View onLayout={handleLayout}>
+      <Text
+        style={{
+          color,
+          fontSize,
+          lineHeight,
+          fontWeight: '600',
+        }}
+      >
+        {text}
+      </Text>
+    </View>
+  );
+});
 
 function PermissionGate({
   cameraGranted,
@@ -107,14 +166,10 @@ export default function CameraStudioScreen() {
   const cameraRef = useRef<CameraView | null>(null);
   const recordTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const {
-    isPaused,
-    scrollPosition,
-    currentWordIndex,
-    isListening,
-    pause,
-    resume,
-  } = usePrompterStore();
+  const isPaused = usePrompterStore((s) => s.isPaused);
+  const currentWordIndex = usePrompterStore((s) => s.currentWordIndex);
+  const pause = usePrompterStore((s) => s.pause);
+  const resume = usePrompterStore((s) => s.resume);
   const { startSession, stopSession, restartSession, seekToWord, engine, words } = usePrompterEngine(
     script?.content ?? ''
   );
@@ -130,16 +185,39 @@ export default function CameraStudioScreen() {
     };
   }, []);
 
-  // Update scroll position for prompter overlay (using inner ScrollView)
-  const overlayScrollRef = useRef<ScrollView | null>(null);
-  const overlayUserScrollingRef = useRef(false);
-  useEffect(() => {
-    if (overlayUserScrollingRef.current) return;
-    overlayScrollRef.current?.scrollTo({ y: scrollPosition, animated: false });
-  }, [scrollPosition]);
-
+  const overlayScrollRef = useAnimatedRef<Animated.ScrollView>();
+  const overlayScrollY = useSharedValue(0);
+  const overlayUserScrolling = useSharedValue(false);
+  const overlayScrollReady = useSharedValue(false);
   const wordPositionsRef = useRef<number[]>([]);
-  const [, forceUpdate] = useState(0);
+  const currentWordIndexRef = useRef(currentWordIndex);
+  const engineRef = useRef(engine);
+
+  useEffect(() => {
+    currentWordIndexRef.current = currentWordIndex;
+  }, [currentWordIndex]);
+
+  useEffect(() => {
+    engineRef.current = engine;
+  }, [engine]);
+
+  // Pipe engine position into UI-thread shared value (no React re-render per frame).
+  useEffect(() => {
+    const unsub = engine.subscribe((pos) => {
+      overlayScrollY.value = pos;
+    });
+    return unsub;
+  }, [engine, overlayScrollY]);
+
+  useAnimatedReaction(
+    () => overlayScrollY.value,
+    (v) => {
+      if (!overlayScrollReady.value) return;
+      if (overlayUserScrolling.value) return;
+      scrollTo(overlayScrollRef, 0, v, false);
+    },
+    []
+  );
 
   useEffect(() => {
     if (currentWordIndex < 0) {
@@ -147,27 +225,24 @@ export default function CameraStudioScreen() {
       return;
     }
     const positions = wordPositionsRef.current;
-    if (positions.length === 0) return;
-    const targetIdx = Math.min(currentWordIndex + 1, positions.length - 1);
+    const targetIdx = currentWordIndex + 1;
     const y = positions[targetIdx];
     if (typeof y === 'number') engine.setTargetPosition(y);
   }, [currentWordIndex, engine]);
 
-  const recordWordPosition = useCallback(
-    (idx: number, y: number) => {
-      const arr = wordPositionsRef.current;
-      if (arr[idx] === y) return;
-      arr[idx] = y;
-      if (idx === currentWordIndex || idx === currentWordIndex + 1) {
-        forceUpdate((n) => n + 1);
-      }
-    },
-    [currentWordIndex]
-  );
+  const recordWordPosition = useCallback((idx: number, y: number) => {
+    const arr = wordPositionsRef.current;
+    if (arr[idx] === y) return;
+    arr[idx] = y;
+    const ci = currentWordIndexRef.current;
+    if (idx === ci + 1 || (ci < 0 && idx === 0)) {
+      engineRef.current.setTargetPosition(y);
+    }
+  }, []);
 
-  const handleOverlayScrollEnd = (e: any) => {
+  const handleOverlayScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     if (!isPaused) return;
-    overlayUserScrollingRef.current = false;
+    overlayUserScrolling.value = false;
     const y = e.nativeEvent.contentOffset.y;
     const positions = wordPositionsRef.current;
     if (positions.length === 0) return;
@@ -412,12 +487,15 @@ export default function CameraStudioScreen() {
             }}
           />
         </View>
-        <ScrollView
+        <Animated.ScrollView
           ref={overlayScrollRef}
           scrollEnabled={isPaused}
           showsVerticalScrollIndicator={false}
+          onLayout={() => {
+            overlayScrollReady.value = true;
+          }}
           onScrollBeginDrag={() => {
-            if (isPaused) overlayUserScrollingRef.current = true;
+            if (isPaused) overlayUserScrolling.value = true;
           }}
           onMomentumScrollEnd={handleOverlayScrollEnd}
           onScrollEndDrag={handleOverlayScrollEnd}
@@ -435,33 +513,24 @@ export default function CameraStudioScreen() {
             }}
           >
             {words.map((word, i) => {
-              const isSpoken = i < currentWordIndex;
-              const isCurrent = i === currentWordIndex;
+              const status: CameraWordStatus =
+                i === currentWordIndex ? 'current' : i < currentWordIndex ? 'spoken' : 'pending';
               return (
-                <View
+                <CameraWord
                   key={i}
-                  onLayout={(e) => recordWordPosition(i, e.nativeEvent.layout.y)}
-                >
-                  <Text
-                    style={{
-                      color: isCurrent
-                        ? colors.accent
-                        : isSpoken
-                        ? 'rgba(255,255,255,0.4)'
-                        : '#FFFFFF',
-                      fontSize,
-                      lineHeight,
-                      fontWeight: isCurrent ? '700' : '400',
-                    }}
-                  >
-                    {word.original + ' '}
-                  </Text>
-                </View>
+                  index={i}
+                  text={word.original + ' '}
+                  status={status}
+                  fontSize={fontSize}
+                  lineHeight={lineHeight}
+                  accentColor={colors.accent}
+                  onLayout={recordWordPosition}
+                />
               );
             })}
           </View>
           <View style={{ height: overlayPanelHeight - overlayReadingLineY }} />
-        </ScrollView>
+        </Animated.ScrollView>
 
         {/* Reading line on overlay */}
         <View

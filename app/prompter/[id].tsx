@@ -1,16 +1,22 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   Dimensions,
   Pressable,
   Modal,
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import Animated, {
   useAnimatedStyle,
   withTiming,
+  useAnimatedRef,
+  useSharedValue,
+  useAnimatedReaction,
+  scrollTo,
 } from 'react-native-reanimated';
 import { X, Pause, Play, Gauge, Minus, Plus, RotateCcw, Voicemail } from 'lucide-react-native';
 import { useScriptsStore } from '@/store/scriptsStore';
@@ -23,6 +29,58 @@ import { Screen } from '@/ui/components/Screen';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const READING_LINE_Y = SCREEN_HEIGHT * 0.42;
+
+type WordStatus = 'pending' | 'current' | 'spoken';
+
+interface PrompterWordProps {
+  index: number;
+  text: string;
+  status: WordStatus;
+  fontSize: number;
+  lineHeight: number;
+  pendingColor: string;
+  currentColor: string;
+  spokenColor: string;
+  onLayout: (idx: number, y: number) => void;
+}
+
+const PrompterWord = memo(function PrompterWord({
+  index,
+  text,
+  status,
+  fontSize,
+  lineHeight,
+  pendingColor,
+  currentColor,
+  spokenColor,
+  onLayout,
+}: PrompterWordProps) {
+  const handleLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      onLayout(index, e.nativeEvent.layout.y);
+    },
+    [index, onLayout]
+  );
+  const color =
+    status === 'current' ? currentColor : status === 'spoken' ? spokenColor : pendingColor;
+  // Font weight DIBUAT KONSTAN buat semua kata — kalau current di-bold, lebar
+  // text berubah → flexWrap reflow → posisi semua kata loncat. Highlight cukup
+  // pakai warna kontras + reading line.
+  return (
+    <View onLayout={handleLayout}>
+      <Text
+        style={{
+          color,
+          fontSize,
+          lineHeight,
+          fontWeight: '600',
+        }}
+      >
+        {text}
+      </Text>
+    </View>
+  );
+});
 
 export default function PrompterScreen() {
   const { id, fontSize } = useLocalSearchParams<{
@@ -38,35 +96,65 @@ export default function PrompterScreen() {
   const getScript = useScriptsStore((s) => s.getScript);
   const script = getScript(id);
 
-  const { isPaused, scrollPosition, currentWordIndex, isListening, pause, resume } =
-    usePrompterStore();
+  const isPaused = usePrompterStore((s) => s.isPaused);
+  const currentWordIndex = usePrompterStore((s) => s.currentWordIndex);
+  const isListening = usePrompterStore((s) => s.isListening);
+  const pause = usePrompterStore((s) => s.pause);
+  const resume = usePrompterStore((s) => s.resume);
 
   const { startSession, stopSession, restartSession, engine, seekToWord, words } = usePrompterEngine(
     script?.content ?? ''
   );
   useKeepAwake(isListening);
 
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useAnimatedRef<Animated.ScrollView>();
+  const scrollY = useSharedValue(0);
+  const userScrolling = useSharedValue(false);
+  const scrollReady = useSharedValue(false);
   const wordPositionsRef = useRef<number[]>([]);
-  const [, forceUpdate] = useState(0);
-  const userScrollingRef = useRef(false);
+  const currentWordIndexRef = useRef(currentWordIndex);
+  const engineRef = useRef(engine);
   const [speedPanelOpen, setSpeedPanelOpen] = useState(false);
+
+  useEffect(() => {
+    currentWordIndexRef.current = currentWordIndex;
+  }, [currentWordIndex]);
+
+  useEffect(() => {
+    engineRef.current = engine;
+  }, [engine]);
 
   useEffect(() => {
     startSession().catch(console.error);
     return () => stopSession();
   }, []);
 
+  // Subscribe directly to engine — write to UI-thread shared value.
+  // No React re-render or JS-bridge call per frame.
   useEffect(() => {
-    // Hindari fight engine vs user kalau user lagi geser manual saat paused
-    if (userScrollingRef.current) return;
-    scrollRef.current?.scrollTo({ y: scrollPosition, animated: false });
-  }, [scrollPosition]);
+    const unsub = engine.subscribe((pos) => {
+      scrollY.value = pos;
+    });
+    return unsub;
+  }, [engine, scrollY]);
+
+  // Drive scrollview from UI thread; gated by:
+  //  - scrollReady → ref baru valid setelah ScrollView ke-mount (onLayout)
+  //  - userScrolling → manual drag wins
+  useAnimatedReaction(
+    () => scrollY.value,
+    (v) => {
+      if (!scrollReady.value) return;
+      if (userScrolling.value) return;
+      scrollTo(scrollRef, 0, v, false);
+    },
+    []
+  );
 
   // Pas user finish manual drag (paused), find nearest word + sync engine state
-  const handleScrollEnd = (e: any) => {
+  const handleScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     if (!isPaused) return;
-    userScrollingRef.current = false;
+    userScrolling.value = false;
     const y = e.nativeEvent.contentOffset.y;
     const positions = wordPositionsRef.current;
     if (positions.length === 0) return;
@@ -92,23 +180,23 @@ export default function PrompterScreen() {
       return;
     }
     const positions = wordPositionsRef.current;
-    if (positions.length === 0) return;
-    const targetIdx = Math.min(currentWordIndex + 1, positions.length - 1);
+    const targetIdx = currentWordIndex + 1;
     const y = positions[targetIdx];
     if (typeof y === 'number') engine.setTargetPosition(y);
+    // Kalau target belum di-layout, recordWordPosition akan push ke engine
+    // begitu layout fired (lihat callback di bawah).
   }, [currentWordIndex, engine]);
 
-  const recordWordPosition = useCallback(
-    (idx: number, y: number) => {
-      const arr = wordPositionsRef.current;
-      if (arr[idx] === y) return;
-      arr[idx] = y;
-      if (idx === currentWordIndex || idx === currentWordIndex + 1) {
-        forceUpdate((n) => n + 1);
-      }
-    },
-    [currentWordIndex]
-  );
+  const recordWordPosition = useCallback((idx: number, y: number) => {
+    const arr = wordPositionsRef.current;
+    if (arr[idx] === y) return;
+    arr[idx] = y;
+    // Kalau ini posisi target word yang useEffect tadi belum bisa baca, push sekarang.
+    const ci = currentWordIndexRef.current;
+    if (idx === ci + 1 || (ci < 0 && idx === 0)) {
+      engineRef.current.setTargetPosition(y);
+    }
+  }, []);
 
   const handleStop = () => {
     stopSession();
@@ -139,12 +227,15 @@ export default function PrompterScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <ScrollView
+      <Animated.ScrollView
         ref={scrollRef}
         scrollEnabled={isPaused}
         showsVerticalScrollIndicator={false}
+        onLayout={() => {
+          scrollReady.value = true;
+        }}
         onScrollBeginDrag={() => {
-          if (isPaused) userScrollingRef.current = true;
+          if (isPaused) userScrolling.value = true;
         }}
         onMomentumScrollEnd={handleScrollEnd}
         onScrollEndDrag={handleScrollEnd}
@@ -164,34 +255,26 @@ export default function PrompterScreen() {
           }}
         >
           {words.map((word, i) => {
-            const isSpoken = i < currentWordIndex;
-            const isCurrent = i === currentWordIndex;
-            const wordColor = isCurrent
-              ? colors.karaokeCurrent
-              : isSpoken
-              ? colors.karaokeSpoken
-              : colors.karaokePending;
+            const status: WordStatus =
+              i === currentWordIndex ? 'current' : i < currentWordIndex ? 'spoken' : 'pending';
             return (
-              <View
+              <PrompterWord
                 key={i}
-                onLayout={(e) => recordWordPosition(i, e.nativeEvent.layout.y)}
-              >
-                <Text
-                  style={{
-                    color: wordColor,
-                    fontSize: parsedFontSize,
-                    lineHeight,
-                    fontWeight: isCurrent ? '700' : '400',
-                  }}
-                >
-                  {word.original + ' '}
-                </Text>
-              </View>
+                index={i}
+                text={word.original + ' '}
+                status={status}
+                fontSize={parsedFontSize}
+                lineHeight={lineHeight}
+                pendingColor={colors.karaokePending}
+                currentColor={colors.karaokeCurrent}
+                spokenColor={colors.karaokeSpoken}
+                onLayout={recordWordPosition}
+              />
             );
           })}
         </View>
         <View style={{ height: SCREEN_HEIGHT - READING_LINE_Y }} />
-      </ScrollView>
+      </Animated.ScrollView>
 
       {/* Reading line */}
       <View
@@ -443,7 +526,7 @@ export default function PrompterScreen() {
           }}
         >
           <Text style={{ color: '#FFFFFF99', fontSize: 11 }}>
-            word {currentWordIndex + 1}/{words.length} · {Math.round(scrollPosition)}px
+            word {currentWordIndex + 1}/{words.length}
             {isPaused ? ' · PAUSED' : ''}
           </Text>
         </View>

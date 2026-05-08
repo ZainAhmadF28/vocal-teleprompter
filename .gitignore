@@ -1,6 +1,6 @@
 # Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
-# dependencies
+# Dependencies
 node_modules/
 
 # Expo
@@ -9,33 +9,69 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native
+# Generated native folders (from `expo prebuild`)
+/ios
+/android
+
+# Native module build artifacts (custom Expo modules under modules/)
+# Aturan ini menangkap folder "android" di sub-directory mana pun, supaya
+# /android root rule (di atas) gak kebobolan untuk modules/*/android.
+**/android/build/
+**/android/.gradle/
+**/android/local.properties
+**/android/.cxx/
+**/ios/build/
+**/ios/Pods/
 .kotlin/
+
+# Signing / certs (jangan pernah commit)
 *.orig.*
 *.jks
 *.p8
 *.p12
 *.key
+*.keystore
 *.mobileprovision
+*.pem
 
 # Metro
 .metro-health-check*
 
-# debug
+# Logs
+*.log
 npm-debug.*
 yarn-debug.*
 yarn-error.*
 
-# macOS
-.DS_Store
-*.pem
+# Test / coverage
+coverage/
+.nyc_output/
 
-# local env files
+# Local env
 .env*.local
 
-# typescript
+# TypeScript
 *.tsbuildinfo
 
-# generated native folders
-/ios
-/android
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# OS junk
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Per-user tool state
+.claude/
+
+# Stray OS-level cache nyasar ke root project
+/Microsoft/
+
+# Local design / reference dump (bukan source)
+/referensi style/
