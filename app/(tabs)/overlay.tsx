@@ -33,8 +33,10 @@ function FloatingOverlaySession({
 }) {
   const scrollMode = useSettingsStore((s) => s.scrollMode);
   const scrollWPM = useSettingsStore((s) => s.scrollWPM);
+  const overlayBackdrop = useSettingsStore((s) => s.overlayBackdrop);
   const setScrollMode = useSettingsStore((s) => s.setScrollMode);
   const setScrollWPM = useSettingsStore((s) => s.setScrollWPM);
+  const setOverlayBackdrop = useSettingsStore((s) => s.setOverlayBackdrop);
   const setOverlayDefaultSize = useSettingsStore((s) => s.setOverlayDefaultSize);
 
   const isPaused = usePrompterStore((s) => s.isPaused);
@@ -77,6 +79,10 @@ function FloatingOverlaySession({
   }, [scrollMode, scrollWPM]);
 
   useEffect(() => {
+    TeleprompterOverlay.setBackdrop(overlayBackdrop);
+  }, [overlayBackdrop]);
+
+  useEffect(() => {
     const subs = [
       TeleprompterOverlay.addListener('controlPressed', async (event) => {
         switch (event.action) {
@@ -106,6 +112,22 @@ function FloatingOverlaySession({
             setScrollWPM(Math.min(250, cur + 10));
             break;
           }
+          case 'toggleBackdrop': {
+            // Native cycles transparent → dim → blur → transparent. Mirror it
+            // into the JS settings store so the config tab stays in sync.
+            const order: Array<'transparent' | 'dim' | 'blur'> = [
+              'transparent',
+              'dim',
+              'blur',
+            ];
+            const cur = useSettingsStore.getState().overlayBackdrop;
+            const next = order[(order.indexOf(cur) + 1) % order.length];
+            setOverlayBackdrop(next);
+            break;
+          }
+          case 'toggleToolbar':
+            // Native handles visibility locally; nothing to mirror in JS.
+            break;
         }
       }),
       TeleprompterOverlay.addListener('sizeChanged', (size) => {
@@ -129,6 +151,7 @@ function FloatingOverlaySession({
     restartSession,
     resume,
     seekToWord,
+    setOverlayBackdrop,
     setOverlayDefaultSize,
     setScrollMode,
     setScrollWPM,
@@ -577,6 +600,7 @@ export default function OverlayTab() {
               scrollMode: settings.scrollMode,
               isPaused: usePrompterStore.getState().isPaused,
               speedLabel: String(settings.scrollWPM),
+              backdrop: settings.overlayBackdrop,
             });
             setOverlayActive(true);
             setActiveScript(script);

@@ -40,7 +40,9 @@ class TeleprompterOverlayModule : Module() {
       "controlPressed",
       "positionChanged",
       "sizeChanged",
-      "indexChanged"
+      "indexChanged",
+      "backdropChanged",
+      "toolbarVisibilityChanged"
     )
 
     AsyncFunction("hasPermission") { ->
@@ -89,6 +91,7 @@ class TeleprompterOverlayModule : Module() {
       val scrollMode = config["scrollMode"] as? String ?: "voice"
       val isPaused = config["isPaused"] as? Boolean ?: false
       val speedLabel = config["speedLabel"] as? String ?: "140"
+      val backdrop = config["backdrop"] as? String ?: "dim"
 
       mainHandler.post {
         overlayManager.show(
@@ -103,7 +106,8 @@ class TeleprompterOverlayModule : Module() {
           height = height,
           initialScrollMode = scrollMode,
           initialPaused = isPaused,
-          initialSpeedLabel = speedLabel
+          initialSpeedLabel = speedLabel,
+          initialBackdrop = backdrop
         )
       }
     }
@@ -138,6 +142,14 @@ class TeleprompterOverlayModule : Module() {
 
     Function("setOpacity") { opacity: Double ->
       mainHandler.post { overlayManager.setOpacity(opacity.toFloat()) }
+    }
+
+    Function("setBackdrop") { mode: String ->
+      mainHandler.post { overlayManager.setBackdrop(mode) }
+    }
+
+    Function("setToolbarVisible") { visible: Boolean ->
+      mainHandler.post { overlayManager.setToolbarVisible(visible) }
     }
 
     AsyncFunction("isShown") { ->

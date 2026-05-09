@@ -3,13 +3,17 @@ import {
   type EventSubscription,
 } from 'expo-modules-core';
 
+export type OverlayBackdrop = 'transparent' | 'dim' | 'blur';
+
 export type OverlayControlAction =
   | 'togglePause'
   | 'restart'
   | 'close'
   | 'toggleMode'
   | 'slower'
-  | 'faster';
+  | 'faster'
+  | 'toggleBackdrop'
+  | 'toggleToolbar';
 
 export interface OverlayConfig {
   text: string;
@@ -22,6 +26,7 @@ export interface OverlayConfig {
   scrollMode?: 'voice' | 'auto';
   isPaused?: boolean;
   speedLabel?: string;
+  backdrop?: OverlayBackdrop;
 }
 
 export interface OverlayEvents {
@@ -48,6 +53,7 @@ interface NativeOverlayModule {
     scrollMode: 'voice' | 'auto';
     isPaused: boolean;
     speedLabel: string;
+    backdrop: OverlayBackdrop;
   }): Promise<void>;
   hide(): void;
   setText(text: string): void;
@@ -57,6 +63,8 @@ interface NativeOverlayModule {
   setScrollMode(mode: 'voice' | 'auto'): void;
   setSpeedLabel(label: string): void;
   setOpacity(opacity: number): void;
+  setBackdrop(mode: OverlayBackdrop): void;
+  setToolbarVisible(visible: boolean): void;
   isShown(): Promise<boolean>;
   addListener<K extends keyof OverlayEvents>(
     event: K,
@@ -99,6 +107,7 @@ const TeleprompterOverlay = {
       scrollMode: config.scrollMode ?? 'voice',
       isPaused: config.isPaused ?? false,
       speedLabel: config.speedLabel ?? '140',
+      backdrop: config.backdrop ?? 'dim',
     });
   },
   async hide(): Promise<void> {
@@ -132,6 +141,17 @@ const TeleprompterOverlay = {
   setOpacity(opacity: number): void {
     if (!Native) return;
     Native.setOpacity(opacity);
+  },
+  setBackdrop(mode: OverlayBackdrop): void {
+    // Older native binaries (built before this method was added) won't expose
+    // it. Guard so a stale APK doesn't crash the JS app — the new behavior
+    // simply no-ops until the user rebuilds the Android module.
+    if (!Native || typeof Native.setBackdrop !== 'function') return;
+    Native.setBackdrop(mode);
+  },
+  setToolbarVisible(visible: boolean): void {
+    if (!Native || typeof Native.setToolbarVisible !== 'function') return;
+    Native.setToolbarVisible(visible);
   },
   async isShown(): Promise<boolean> {
     if (!Native) return false;

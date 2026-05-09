@@ -3,7 +3,10 @@ package expo.modules.teleprompteroverlay
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.RenderEffect
+import android.graphics.Shader
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -32,8 +35,18 @@ private data class WordRange(val start: Int, val end: Int)
 /**
  * Floating Android system overlay for teleprompter text.
  *
- * JS owns STT/auto-scroll timing. Native owns the floating window, buttons,
- * drag-to-move, resize handles, highlighting, and scroll-to-current-word.
+ * Visual layout (matches the merged Editor / preflight design):
+ *   [mode label pill]                                   <- top-left badge
+ *   [drag · ◁◁ ▷▷ ↻ [PAUSE] window eye X]               <- toolbar pill
+ *   [card with karaoke text + corner resize]            <- text card
+ *
+ * Backdrop modes change ONLY the text card's background:
+ *   - transparent : no fill, dashed outline (text floats over screen)
+ *   - dim         : solid dark fill
+ *   - blur        : translucent fill + RenderEffect blur (API 31+, fallback dim)
+ *
+ * Toolbar can be hidden via the eye button — mode label pill becomes drag target
+ * and a single eye-off circle appears in the card's top-right.
  */
 class OverlayManager(
   private val context: Context,
@@ -43,12 +56,31 @@ class OverlayManager(
   private val onIndexChanged: (Int) -> Unit = {}
 ) {
 
+  // Palette aligned with the Editor design (neon green accent on dark chrome).
+  private val NEON = Color.parseColor("#BFEF3F")
+  private val SPOKEN_TEXT = Color.parseColor("#5C5F66")
+  private val UPCOMING_TEXT = Color.WHITE
+  private val DARK_FILL = Color.parseColor("#14181B")
+  private val BTN_BG = Color.parseColor("#2A2D31")
+  private val ICON_TINT = Color.parseColor("#E5E7EB")
+  private val DANGER_FG = Color.parseColor("#EF4444")
+  private val DANGER_BG = Color.parseColor("#3A1419")
+  private val LABEL_FG = Color.parseColor("#FAFAFA")
+  private val LABEL_DIM = Color.parseColor("#A1A1AA")
+
   private var rootView: FrameLayout? = null
+  private var modeLabelView: LinearLayout? = null
+  private var modeLabelText: TextView? = null
+  private var toolbarView: LinearLayout? = null
+  private var cardView: FrameLayout? = null
+  private var cardBackgroundView: View? = null
   private var scrollView: ScrollView? = null
   private var textView: TextView? = null
-  private var readingLineView: View? = null
-  private var modeButton: ImageButton? = null
   private var pauseButton: ImageButton? = null
+  private var windowButton: ImageButton? = null
+  private var eyeToggleButton: ImageButton? = null
+  private var collapsedEyeButton: ImageButton? = null
+  private var resizeHandle: ImageButton? = null
   private var layoutParams: WindowManager.LayoutParams? = null
 
   private var scriptText = ""
@@ -58,6 +90,8 @@ class OverlayManager(
   private var scrollMode = "voice"
   private var speedLabel = "140"
   private var wpm = 140
+  private var backdrop = "dim"
+  private var toolbarVisible = true
 
   // Native auto-scroll timer (runs in main looper, survives JS background pause)
   private val autoHandler = Handler(Looper.getMainLooper())
@@ -83,18 +117,20 @@ class OverlayManager(
     height: Int,
     initialScrollMode: String,
     initialPaused: Boolean,
-    initialSpeedLabel: String
+    initialSpeedLabel: String,
+    initialBackdrop: String
   ) {
     scrollMode = initialScrollMode
     isPaused = initialPaused
     speedLabel = initialSpeedLabel
+    backdrop = normalizeBackdrop(initialBackdrop)
 
     if (rootView != null) {
-      // Already shown — reuse existing window, just update state.
       setText(text)
       setScrollMode(initialScrollMode)
       setPaused(initialPaused)
       setSpeedLabel(initialSpeedLabel)
+      setBackdrop(initialBackdrop)
       syncAutoScrollState()
       return
     }
@@ -103,12 +139,129 @@ class OverlayManager(
     val initialHeight = clampHeight(height)
 
     val container = FrameLayout(context).apply {
-      setBackgroundColor(applyAlpha(backgroundColor, opacity))
+      // Container is fully transparent; only inner pieces draw chrome.
+      setBackgroundColor(Color.TRANSPARENT)
     }
 
-    // ScrollView occupies content area between top handle and bottom controls.
-    // Use FrameLayout margins instead of internal padding so that text never
-    // renders under the drag handle or control bar.
+    // ---- Mode label pill (top-left) ---------------------------------------
+    val labelPill = LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      background = pillDrawable(DARK_FILL, dpToPx(999f).toFloat())
+      setPadding(dpToPx(12f), dpToPx(6f), dpToPx(12f), dpToPx(6f))
+    }
+    val dot = View(context).apply {
+      background = circleDrawable(NEON)
+    }
+    labelPill.addView(
+      dot,
+      LinearLayout.LayoutParams(dpToPx(8f), dpToPx(8f)).apply {
+        rightMargin = dpToPx(8f)
+      }
+    )
+    val labelText = TextView(context).apply {
+      textSize = 11f
+      setTextColor(LABEL_FG)
+      typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+      letterSpacing = 0.08f
+      setText(computeModeLabel())
+    }
+    labelPill.addView(labelText)
+
+    container.addView(
+      labelPill,
+      FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.WRAP_CONTENT,
+        FrameLayout.LayoutParams.WRAP_CONTENT
+      ).apply {
+        gravity = Gravity.TOP or Gravity.START
+        leftMargin = dpToPx(8f)
+        topMargin = dpToPx(4f)
+      }
+    )
+
+    // ---- Toolbar pill (top, full-ish width, contains buttons) -------------
+    val toolbar = LinearLayout(context).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      background = pillDrawable(DARK_FILL, dpToPx(28f).toFloat())
+      setPadding(dpToPx(8f), dpToPx(6f), dpToPx(8f), dpToPx(6f))
+    }
+
+    val handleStripe = View(context).apply {
+      background = pillDrawable(Color.parseColor("#3F3F46"), dpToPx(2f).toFloat())
+    }
+    toolbar.addView(
+      handleStripe,
+      LinearLayout.LayoutParams(dpToPx(20f), dpToPx(3f)).apply {
+        leftMargin = dpToPx(6f)
+        rightMargin = dpToPx(8f)
+      }
+    )
+
+    val rewindBtn = makeRoundButton(R.drawable.ic_overlay_rewind, "Mundur") {
+      handleSlower()
+    }
+    val forwardBtn = makeRoundButton(R.drawable.ic_overlay_forward, "Maju") {
+      handleFaster()
+    }
+    val restartBtn = makeRoundButton(R.drawable.ic_overlay_restart, "Mulai ulang") {
+      handleRestart()
+    }
+    val pauseBtn = makeRoundButton(pauseIcon(), "Pause atau lanjut") {
+      handleTogglePause()
+    }
+    pauseButton = pauseBtn
+    refreshPauseAppearance()
+    val windowBtn = makeRoundButton(R.drawable.ic_overlay_window, "Ubah backdrop") {
+      handleToggleBackdrop()
+    }
+    windowButton = windowBtn
+    val eyeBtn = makeRoundButton(R.drawable.ic_overlay_eye_off, "Sembunyikan toolbar") {
+      handleToggleToolbar()
+    }
+    eyeToggleButton = eyeBtn
+    val closeBtn = makeRoundButton(R.drawable.ic_overlay_close, "Tutup overlay") {
+      handleClose()
+    }
+    closeBtn.setColorFilter(DANGER_FG)
+    closeBtn.background = circleDrawable(DANGER_BG)
+
+    toolbar.addView(rewindBtn)
+    toolbar.addView(forwardBtn)
+    toolbar.addView(restartBtn)
+    toolbar.addView(pauseBtn)
+    toolbar.addView(windowBtn)
+    toolbar.addView(eyeBtn)
+    toolbar.addView(closeBtn)
+
+    container.addView(
+      toolbar,
+      FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        toolbarHeight()
+      ).apply {
+        gravity = Gravity.TOP
+        leftMargin = dpToPx(4f)
+        rightMargin = dpToPx(4f)
+        topMargin = topToolbarOffset()
+      }
+    )
+
+    // ---- Text card (positioned below toolbar) -----------------------------
+    val card = FrameLayout(context)
+    cardView = card
+
+    val cardBackground = View(context)
+    cardBackgroundView = cardBackground
+    card.addView(
+      cardBackground,
+      FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        FrameLayout.LayoutParams.MATCH_PARENT
+      )
+    )
+
     val sv = ScrollView(context).apply {
       isVerticalScrollBarEnabled = false
       overScrollMode = View.OVER_SCROLL_NEVER
@@ -117,10 +270,10 @@ class OverlayManager(
 
     val tv = TextView(context).apply {
       textSize = fontSize
-      setTextColor(fontColor)
-      setLineSpacing(0f, 1.15f)
+      setTextColor(UPCOMING_TEXT)
+      setLineSpacing(0f, 1.25f)
+      typeface = Typeface.DEFAULT
     }
-
     sv.addView(
       tv,
       FrameLayout.LayoutParams(
@@ -128,128 +281,54 @@ class OverlayManager(
         FrameLayout.LayoutParams.WRAP_CONTENT
       )
     )
-
-    container.addView(
+    card.addView(
       sv,
       FrameLayout.LayoutParams(
         FrameLayout.LayoutParams.MATCH_PARENT,
         FrameLayout.LayoutParams.MATCH_PARENT
-      ).apply {
-        topMargin = topHandleHeight()
-        bottomMargin = bottomControlsHeight()
+      )
+    )
+
+    // Eye button shown ONLY when toolbar is hidden — sits in card top-right.
+    val collapsedEye = makeRoundButton(R.drawable.ic_overlay_eye, "Tampilkan toolbar") {
+      handleToggleToolbar()
+    }
+    collapsedEyeButton = collapsedEye
+    card.addView(
+      collapsedEye,
+      FrameLayout.LayoutParams(roundButtonSize(), roundButtonSize()).apply {
+        gravity = Gravity.TOP or Gravity.END
+        topMargin = dpToPx(8f)
+        rightMargin = dpToPx(8f)
+      }
+    )
+    collapsedEye.visibility = View.GONE
+
+    val cornerResize = makeResizeHandle()
+    resizeHandle = cornerResize
+    card.addView(
+      cornerResize,
+      FrameLayout.LayoutParams(dpToPx(28f), dpToPx(28f)).apply {
+        gravity = Gravity.BOTTOM or Gravity.END
+        bottomMargin = dpToPx(6f)
+        rightMargin = dpToPx(6f)
       }
     )
 
-    val readingLine = View(context).apply {
-      setBackgroundColor(Color.parseColor("#3B82F6"))
-      alpha = 0.65f
-    }
-    readingLineView = readingLine
     container.addView(
-      readingLine,
+      card,
       FrameLayout.LayoutParams(
         FrameLayout.LayoutParams.MATCH_PARENT,
-        max(2, dpToPx(1.5f))
-      ).apply {
-        gravity = Gravity.TOP
-        leftMargin = dpToPx(28f)
-        rightMargin = dpToPx(28f)
-      }
-    )
-
-    val dragHandle = makeTopHandle()
-    container.addView(
-      dragHandle,
-      FrameLayout.LayoutParams(
-        FrameLayout.LayoutParams.MATCH_PARENT,
-        topHandleHeight()
-      ).apply {
-        gravity = Gravity.TOP
-      }
-    )
-
-    val controls = LinearLayout(context).apply {
-      orientation = LinearLayout.HORIZONTAL
-      gravity = Gravity.CENTER
-      setPadding(dpToPx(8f), dpToPx(6f), dpToPx(8f), dpToPx(6f))
-      setBackgroundColor(Color.argb(150, 0, 0, 0))
-    }
-    container.addView(
-      controls,
-      FrameLayout.LayoutParams(
-        FrameLayout.LayoutParams.MATCH_PARENT,
-        bottomControlsHeight()
-      ).apply {
-        gravity = Gravity.BOTTOM
-      }
-    )
-
-    // Buttons toggle native state LOCALLY first, then notify JS for sync.
-    // This way the action feels instant even if JS thread is paused (e.g. when
-    // host activity is in background) and avoids waking the host activity.
-    val modeBtn = makeControlButton(modeIcon(), "Ubah mode scroll") {
-      handleToggleMode()
-    }
-    val pauseBtn = makeControlButton(pauseIcon(), "Pause atau lanjut") {
-      handleTogglePause()
-    }
-    modeButton = modeBtn
-    pauseButton = pauseBtn
-
-    controls.addView(modeBtn)
-    controls.addView(makeControlButton(R.drawable.ic_overlay_minus, "Perlambat") {
-      handleSlower()
-    })
-    controls.addView(pauseBtn)
-    controls.addView(makeControlButton(R.drawable.ic_overlay_plus, "Percepat") {
-      handleFaster()
-    })
-    controls.addView(makeControlButton(R.drawable.ic_overlay_restart, "Mulai ulang") {
-      handleRestart()
-    })
-    controls.addView(makeControlButton(R.drawable.ic_overlay_close, "Tutup overlay") {
-      handleClose()
-    })
-
-    val rightResize = makeResizeHandle(R.drawable.ic_overlay_resize_width, "Resize horizontal")
-    container.addView(
-      rightResize,
-      FrameLayout.LayoutParams(
-        dpToPx(28f),
         FrameLayout.LayoutParams.MATCH_PARENT
       ).apply {
-        gravity = Gravity.END
-        topMargin = topHandleHeight()
-        bottomMargin = bottomControlsHeight()
+        topMargin = cardTopMargin()
+        leftMargin = dpToPx(4f)
+        rightMargin = dpToPx(4f)
+        bottomMargin = dpToPx(4f)
       }
     )
 
-    val bottomResize = makeResizeHandle(R.drawable.ic_overlay_resize_height, "Resize vertikal")
-    container.addView(
-      bottomResize,
-      FrameLayout.LayoutParams(
-        FrameLayout.LayoutParams.MATCH_PARENT,
-        dpToPx(26f)
-      ).apply {
-        gravity = Gravity.BOTTOM
-        leftMargin = dpToPx(28f)
-        rightMargin = dpToPx(72f)
-        bottomMargin = bottomControlsHeight()
-      }
-    )
-
-    val cornerResize = makeResizeHandle(R.drawable.ic_overlay_resize_both, "Resize bebas")
-    container.addView(
-      cornerResize,
-      FrameLayout.LayoutParams(
-        dpToPx(64f),
-        dpToPx(42f)
-      ).apply {
-        gravity = Gravity.BOTTOM or Gravity.END
-        bottomMargin = bottomControlsHeight()
-      }
-    )
-
+    // ---- Window params + listeners ----------------------------------------
     val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
     } else {
@@ -274,25 +353,29 @@ class OverlayManager(
       y = posY
     }
 
-    attachDragListener(dragHandle, container, params)
-    attachDragListener(sv, container, params)
-    attachResizeListener(rightResize, container, params, resizeWidth = true, resizeHeight = false)
-    attachResizeListener(bottomResize, container, params, resizeWidth = false, resizeHeight = true)
-    attachResizeListener(cornerResize, container, params, resizeWidth = true, resizeHeight = true)
+    attachDragListener(labelPill, container, params)
+    attachDragListener(toolbar, container, params)
+    attachDragListener(cardBackground, container, params)
+    attachResizeListener(cornerResize, container, params)
 
     windowManager.addView(container, params)
 
     rootView = container
+    modeLabelView = labelPill
+    modeLabelText = labelText
+    toolbarView = toolbar
     scrollView = sv
     textView = tv
     layoutParams = params
 
     wpm = initialSpeedLabel.toIntOrNull() ?: 140
 
+    applyBackdropStyle()
+    refreshPauseAppearance()
+    refreshModeLabel()
     updateContentGeometry(initialHeight)
     setText(text)
 
-    // Kick off auto-scroll right away if launched into auto mode.
     if (scrollMode == "auto" && !isPaused) {
       startAutoScrollTimer()
     }
@@ -314,50 +397,58 @@ class OverlayManager(
 
   fun setPaused(paused: Boolean) {
     isPaused = paused
-    pauseButton?.setImageResource(pauseIcon())
+    refreshPauseAppearance()
     syncAutoScrollState()
   }
 
   fun setScrollMode(mode: String) {
     scrollMode = mode
-    modeButton?.setImageResource(modeIcon())
     syncAutoScrollState()
   }
 
   fun setSpeedLabel(label: String) {
     speedLabel = label
     label.toIntOrNull()?.let { wpm = max(40, min(400, it)) }
-    modeButton?.setImageResource(modeIcon())
     if (scrollMode == "auto" && !isPaused && autoTask != null) {
-      startAutoScrollTimer() // restart with new interval
+      startAutoScrollTimer()
     }
   }
 
   fun setWpm(value: Int) {
     wpm = max(40, min(400, value))
     speedLabel = wpm.toString()
-    modeButton?.setImageResource(modeIcon())
     if (scrollMode == "auto" && !isPaused && autoTask != null) {
       startAutoScrollTimer()
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Native action handlers — invoked from button taps. These mutate state
-  // locally so the overlay responds instantly without waiting for JS, then
-  // emit an event so JS can mirror state in its store.
-  // ---------------------------------------------------------------------------
-
-  private fun handleToggleMode() {
-    scrollMode = if (scrollMode == "auto") "voice" else "auto"
-    modeButton?.setImageResource(modeIcon())
-    syncAutoScrollState()
-    onControlPressed("toggleMode")
+  fun setBackdrop(mode: String) {
+    backdrop = normalizeBackdrop(mode)
+    applyBackdropStyle()
+    refreshModeLabel()
   }
+
+  fun setToolbarVisible(visible: Boolean) {
+    toolbarVisible = visible
+    toolbarView?.visibility = if (visible) View.VISIBLE else View.GONE
+    collapsedEyeButton?.visibility = if (visible) View.GONE else View.VISIBLE
+    val card = cardView ?: return
+    val lp = card.layoutParams as? FrameLayout.LayoutParams ?: return
+    lp.topMargin = cardTopMargin()
+    card.layoutParams = lp
+    layoutParams?.height?.let { updateContentGeometry(it) }
+    refreshModeLabel()
+  }
+
+  // ---------------------------------------------------------------------------
+  // Action handlers — invoked from button taps. Mutate state locally so the
+  // overlay responds instantly without waiting for JS, then emit an event so
+  // JS can mirror state in its store.
+  // ---------------------------------------------------------------------------
 
   private fun handleTogglePause() {
     isPaused = !isPaused
-    pauseButton?.setImageResource(pauseIcon())
+    refreshPauseAppearance()
     syncAutoScrollState()
     onControlPressed("togglePause")
   }
@@ -386,10 +477,23 @@ class OverlayManager(
     onControlPressed("close")
   }
 
+  private fun handleToggleBackdrop() {
+    val next = when (backdrop) {
+      "transparent" -> "dim"
+      "dim" -> "blur"
+      else -> "transparent"
+    }
+    setBackdrop(next)
+    onControlPressed("toggleBackdrop")
+  }
+
+  private fun handleToggleToolbar() {
+    setToolbarVisible(!toolbarVisible)
+    onControlPressed("toggleToolbar")
+  }
+
   // ---------------------------------------------------------------------------
-  // Native auto-scroll timer — runs on main looper so it survives JS thread
-  // throttling when host activity is paused. Increments currentWordIndex at
-  // a cadence derived from wpm (defaults to 140 wpm = ~430ms/word).
+  // Auto-scroll timer
   // ---------------------------------------------------------------------------
 
   private fun startAutoScrollTimer() {
@@ -401,9 +505,6 @@ class OverlayManager(
           currentWordIndex += 1
           renderHighlightedText()
           scrollToCurrentWord()
-          // Tell JS so its matcher state stays in sync — needed when user
-          // toggles back to voice mode mid-script. Idempotent if JS already
-          // mirrors via push effect.
           onIndexChanged(currentWordIndex)
         }
         autoHandler.postDelayed(this, intervalMs)
@@ -443,76 +544,142 @@ class OverlayManager(
       // Already removed.
     }
     rootView = null
+    modeLabelView = null
+    modeLabelText = null
+    toolbarView = null
+    cardView = null
+    cardBackgroundView = null
     scrollView = null
     textView = null
-    readingLineView = null
-    modeButton = null
     pauseButton = null
+    windowButton = null
+    eyeToggleButton = null
+    collapsedEyeButton = null
+    resizeHandle = null
     layoutParams = null
   }
 
-  private fun makeControlButton(iconRes: Int, description: String, onClick: () -> Unit): ImageButton {
+  // ---------------------------------------------------------------------------
+  // View builders / styling helpers
+  // ---------------------------------------------------------------------------
+
+  private fun makeRoundButton(iconRes: Int, description: String, onClick: () -> Unit): ImageButton {
+    val size = roundButtonSize()
     return ImageButton(context).apply {
       setImageResource(iconRes)
-      setColorFilter(Color.WHITE)
-      scaleType = ImageView.ScaleType.CENTER
-      adjustViewBounds = false
+      setColorFilter(ICON_TINT)
+      scaleType = ImageView.ScaleType.CENTER_INSIDE
       contentDescription = description
-      setPadding(dpToPx(10f), dpToPx(10f), dpToPx(10f), dpToPx(10f))
-      setBackgroundColor(Color.TRANSPARENT)
+      background = circleDrawable(BTN_BG)
+      setPadding(dpToPx(7f), dpToPx(7f), dpToPx(7f), dpToPx(7f))
       setOnClickListener { onClick() }
-      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
-        leftMargin = dpToPx(4f)
-        rightMargin = dpToPx(4f)
-      }
+      val lp = LinearLayout.LayoutParams(size, size)
+      lp.leftMargin = dpToPx(2f)
+      lp.rightMargin = dpToPx(2f)
+      layoutParams = lp
     }
   }
 
-  private fun makeResizeHandle(iconRes: Int, description: String): ImageButton {
+  private fun makeResizeHandle(): ImageButton {
     return ImageButton(context).apply {
-      setImageResource(iconRes)
-      setColorFilter(Color.argb(230, 255, 255, 255))
-      scaleType = ImageView.ScaleType.CENTER
-      contentDescription = description
+      setImageResource(R.drawable.ic_overlay_resize_both)
+      setColorFilter(Color.argb(220, 230, 230, 235))
+      scaleType = ImageView.ScaleType.CENTER_INSIDE
+      contentDescription = "Resize"
       setPadding(dpToPx(4f), dpToPx(4f), dpToPx(4f), dpToPx(4f))
       setBackgroundColor(Color.TRANSPARENT)
     }
   }
 
-  private fun makeTopHandle(): ImageButton {
-    return ImageButton(context).apply {
-      setImageResource(R.drawable.ic_overlay_drag_handle)
-      setColorFilter(Color.argb(210, 255, 255, 255))
-      scaleType = ImageView.ScaleType.CENTER
-      contentDescription = "Geser overlay"
-      setPadding(dpToPx(8f), dpToPx(7f), dpToPx(8f), dpToPx(7f))
-      setBackgroundColor(Color.argb(125, 0, 0, 0))
+  private fun pillDrawable(color: Int, radius: Float): GradientDrawable {
+    return GradientDrawable().apply {
+      shape = GradientDrawable.RECTANGLE
+      setColor(color)
+      cornerRadius = radius
     }
   }
 
-  private fun modeIcon(): Int {
-    return if (scrollMode == "auto") {
-      R.drawable.ic_overlay_gauge
-    } else {
-      R.drawable.ic_overlay_voice
+  private fun circleDrawable(color: Int): GradientDrawable {
+    return GradientDrawable().apply {
+      shape = GradientDrawable.OVAL
+      setColor(color)
     }
   }
 
-  private fun pauseIcon(): Int {
-    return if (isPaused) {
-      R.drawable.ic_overlay_play
-    } else {
-      R.drawable.ic_overlay_pause
+  private fun dashedOutlineDrawable(): GradientDrawable {
+    return GradientDrawable().apply {
+      shape = GradientDrawable.RECTANGLE
+      cornerRadius = dpToPx(20f).toFloat()
+      setColor(Color.TRANSPARENT)
+      setStroke(
+        dpToPx(1.5f),
+        Color.argb(170, 255, 255, 255),
+        dpToPx(6f).toFloat(),
+        dpToPx(4f).toFloat()
+      )
     }
   }
 
-  private fun modeLabel(): String {
-    return if (scrollMode == "auto") {
-      "AUTO $speedLabel"
+  private fun applyBackdropStyle() {
+    val bg = cardBackgroundView ?: return
+    when (backdrop) {
+      "transparent" -> {
+        bg.background = dashedOutlineDrawable()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          bg.setRenderEffect(null)
+        }
+      }
+      "blur" -> {
+        // Translucent fill so the blur has something to compose against; on
+        // pre-S devices this gracefully degrades to a frosted look.
+        bg.background = pillDrawable(Color.argb(120, 30, 30, 35), dpToPx(20f).toFloat())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          bg.setRenderEffect(
+            RenderEffect.createBlurEffect(24f, 24f, Shader.TileMode.CLAMP)
+          )
+        }
+      }
+      else -> { // "dim"
+        bg.background = pillDrawable(Color.argb(228, 18, 22, 26), dpToPx(20f).toFloat())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          bg.setRenderEffect(null)
+        }
+      }
+    }
+    refreshModeLabel()
+  }
+
+  private fun refreshPauseAppearance() {
+    val btn = pauseButton ?: return
+    btn.setImageResource(pauseIcon())
+    if (!isPaused) {
+      btn.background = circleDrawable(NEON)
+      btn.setColorFilter(Color.parseColor("#0A0A0F"))
     } else {
-      "VOICE"
+      btn.background = circleDrawable(BTN_BG)
+      btn.setColorFilter(ICON_TINT)
     }
   }
+
+  private fun refreshModeLabel() {
+    modeLabelText?.text = computeModeLabel()
+  }
+
+  private fun computeModeLabel(): String {
+    if (!toolbarVisible) return "04 · TOOLBAR HIDDEN"
+    return when (backdrop) {
+      "transparent" -> "01 · TRANSPARENT"
+      "blur" -> "03 · BLUR"
+      else -> "02 · DIM"
+    }
+  }
+
+  private fun pauseIcon(): Int =
+    if (isPaused) R.drawable.ic_overlay_play else R.drawable.ic_overlay_pause
+
+  // ---------------------------------------------------------------------------
+  // Highlighting / scroll
+  // ---------------------------------------------------------------------------
 
   private fun renderHighlightedText() {
     val tv = textView ?: return
@@ -520,9 +687,9 @@ class OverlayManager(
 
     wordRanges.forEachIndexed { index, range ->
       val color = when {
-        index == currentWordIndex -> Color.parseColor("#3B82F6")
-        index < currentWordIndex -> Color.argb(120, 255, 255, 255)
-        else -> Color.WHITE
+        index == currentWordIndex -> NEON
+        index < currentWordIndex -> SPOKEN_TEXT
+        else -> UPCOMING_TEXT
       }
       spannable.setSpan(
         ForegroundColorSpan(color),
@@ -546,7 +713,7 @@ class OverlayManager(
   private fun scrollToCurrentWord() {
     val tv = textView ?: return
     val sv = scrollView ?: return
-    val root = rootView ?: return
+    val card = cardView ?: return
 
     if (currentWordIndex < 0 || currentWordIndex >= wordRanges.size) {
       sv.scrollTo(0, 0)
@@ -559,11 +726,7 @@ class OverlayManager(
       return
     }
 
-    // Reading line is at 30% of CONTENT area (between handle and controls),
-    // not 30% of root, so the math stays correct on small overlays.
-    val contentHeight = max(0, root.height - topHandleHeight() - bottomControlsHeight())
-    val readingOffset = (contentHeight * 0.30f).toInt()
-
+    val readingOffset = (card.height * 0.30f).toInt()
     val start = wordRanges[currentWordIndex].start
     val line = layout.getLineForOffset(start)
     val lineTop = layout.getLineTop(line)
@@ -575,6 +738,10 @@ class OverlayManager(
       WordRange(it.range.first, it.range.last + 1)
     }.toList()
   }
+
+  // ---------------------------------------------------------------------------
+  // Drag / resize listeners
+  // ---------------------------------------------------------------------------
 
   private fun attachDragListener(touchView: View, movedView: View, params: WindowManager.LayoutParams) {
     var initialX = 0
@@ -621,9 +788,7 @@ class OverlayManager(
   private fun attachResizeListener(
     touchView: View,
     movedView: View,
-    params: WindowManager.LayoutParams,
-    resizeWidth: Boolean,
-    resizeHeight: Boolean
+    params: WindowManager.LayoutParams
   ) {
     var initialWidth = 0
     var initialHeight = 0
@@ -640,12 +805,8 @@ class OverlayManager(
           true
         }
         MotionEvent.ACTION_MOVE -> {
-          if (resizeWidth) {
-            params.width = clampWidth(initialWidth + (event.rawX - touchStartX).toInt())
-          }
-          if (resizeHeight) {
-            params.height = clampHeight(initialHeight + (event.rawY - touchStartY).toInt())
-          }
+          params.width = clampWidth(initialWidth + (event.rawX - touchStartX).toInt())
+          params.height = clampHeight(initialHeight + (event.rawY - touchStartY).toInt())
           updateContentGeometry(params.height)
           updateWindowLayout(movedView, params)
           true
@@ -667,39 +828,16 @@ class OverlayManager(
     }
   }
 
-  /**
-   * Recalculates layout-dependent values whenever overlay height changes.
-   *
-   * Goals:
-   *  - Top of script ALWAYS sits at the top of the content area (small fixed
-   *    padding), no matter how tall the overlay is — so first word stays
-   *    visible from the start.
-   *  - Reading line sits at 30% of the *content* area (between handle and
-   *    controls), giving roughly 1/3 already-read context above and 2/3
-   *    upcoming text below the focus line.
-   *  - Bottom padding is large enough that the LAST line of the script can
-   *    still scroll up to the reading line.
-   *  - Side padding stays comfortable for reading.
-   */
   private fun updateContentGeometry(height: Int) {
     val tv = textView ?: return
-    val line = readingLineView
-    val contentHeight = max(0, height - topHandleHeight() - bottomControlsHeight())
+    val card = cardView ?: return
+    val cardHeight = max(0, height - cardTopMargin() - dpToPx(4f))
 
-    val topPadding = dpToPx(16f) // small constant — top of script stays at top
-    val readingOffset = (contentHeight * 0.30f).toInt()
-    // Bottom padding: empty space below script so last line can reach reading line.
-    val bottomPadding = max(dpToPx(16f), contentHeight - readingOffset - dpToPx(16f))
+    val topPadding = dpToPx(20f)
+    val readingOffset = (cardHeight * 0.30f).toInt()
+    val bottomPadding = max(dpToPx(20f), cardHeight - readingOffset - dpToPx(20f))
     val sidePadding = dpToPx(24f)
-
     tv.setPadding(sidePadding, topPadding, sidePadding, bottomPadding)
-
-    val lp = line?.layoutParams as? FrameLayout.LayoutParams
-    if (lp != null) {
-      // Reading line sits relative to the *container*, so add top handle offset.
-      lp.topMargin = topHandleHeight() + readingOffset
-      line.layoutParams = lp
-    }
 
     tv.post { scrollToCurrentWord() }
   }
@@ -711,19 +849,21 @@ class OverlayManager(
 
   private fun clampHeight(height: Int): Int {
     val screenHeight = context.resources.displayMetrics.heightPixels
-    return min(max(height, dpToPx(170f)), (screenHeight * 0.86f).roundToInt())
+    return min(max(height, dpToPx(180f)), (screenHeight * 0.86f).roundToInt())
   }
 
-  private fun topHandleHeight(): Int = dpToPx(36f)
-
-  private fun bottomControlsHeight(): Int = dpToPx(58f)
+  private fun roundButtonSize(): Int = dpToPx(38f)
+  private fun toolbarHeight(): Int = dpToPx(54f)
+  private fun topToolbarOffset(): Int = dpToPx(40f)
+  private fun cardTopMargin(): Int =
+    if (toolbarVisible) topToolbarOffset() + toolbarHeight() + dpToPx(8f) else dpToPx(40f)
 
   private fun dpToPx(dp: Float): Int = (dp * density).roundToInt()
-
   private fun pxToDp(px: Int): Int = (px / density).roundToInt()
 
-  private fun applyAlpha(color: Int, alpha: Float): Int {
-    val a = (alpha.coerceIn(0f, 1f) * 255).toInt()
-    return Color.argb(a, Color.red(color), Color.green(color), Color.blue(color))
-  }
+  private fun normalizeBackdrop(mode: String): String =
+    when (mode.lowercase()) {
+      "transparent", "blur", "dim" -> mode.lowercase()
+      else -> "dim"
+    }
 }
