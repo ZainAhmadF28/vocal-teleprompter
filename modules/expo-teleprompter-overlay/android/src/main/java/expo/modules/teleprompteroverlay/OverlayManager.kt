@@ -77,6 +77,7 @@ class OverlayManager(
   private var scrollView: ScrollView? = null
   private var textView: TextView? = null
   private var pauseButton: ImageButton? = null
+  private var modeButton: ImageButton? = null
   private var windowButton: ImageButton? = null
   private var eyeToggleButton: ImageButton? = null
   private var collapsedEyeButton: ImageButton? = null
@@ -199,12 +200,17 @@ class OverlayManager(
       }
     )
 
-    val rewindBtn = makeRoundButton(R.drawable.ic_overlay_rewind, "Mundur") {
+    val rewindBtn = makeRoundButton(R.drawable.ic_overlay_rewind, "Perlambat") {
       handleSlower()
     }
-    val forwardBtn = makeRoundButton(R.drawable.ic_overlay_forward, "Maju") {
+    val forwardBtn = makeRoundButton(R.drawable.ic_overlay_forward, "Percepat") {
       handleFaster()
     }
+    val modeBtn = makeRoundButton(modeIcon(), "Ubah mode scroll") {
+      handleToggleMode()
+    }
+    modeButton = modeBtn
+    refreshModeAppearance()
     val restartBtn = makeRoundButton(R.drawable.ic_overlay_restart, "Mulai ulang") {
       handleRestart()
     }
@@ -227,6 +233,7 @@ class OverlayManager(
     closeBtn.setColorFilter(DANGER_FG)
     closeBtn.background = circleDrawable(DANGER_BG)
 
+    toolbar.addView(modeBtn)
     toolbar.addView(rewindBtn)
     toolbar.addView(forwardBtn)
     toolbar.addView(restartBtn)
@@ -403,6 +410,7 @@ class OverlayManager(
 
   fun setScrollMode(mode: String) {
     scrollMode = mode
+    refreshModeAppearance()
     syncAutoScrollState()
   }
 
@@ -451,6 +459,13 @@ class OverlayManager(
     refreshPauseAppearance()
     syncAutoScrollState()
     onControlPressed("togglePause")
+  }
+
+  private fun handleToggleMode() {
+    scrollMode = if (scrollMode == "auto") "voice" else "auto"
+    refreshModeAppearance()
+    syncAutoScrollState()
+    onControlPressed("toggleMode")
   }
 
   private fun handleSlower() {
@@ -552,6 +567,7 @@ class OverlayManager(
     scrollView = null
     textView = null
     pauseButton = null
+    modeButton = null
     windowButton = null
     eyeToggleButton = null
     collapsedEyeButton = null
@@ -661,6 +677,14 @@ class OverlayManager(
     }
   }
 
+  private fun refreshModeAppearance() {
+    val btn = modeButton ?: return
+    btn.setImageResource(modeIcon())
+    // Tint slightly so the active mode reads as accent without stealing focus
+    // from the primary pause control.
+    btn.setColorFilter(if (scrollMode == "auto") NEON else ICON_TINT)
+  }
+
   private fun refreshModeLabel() {
     modeLabelText?.text = computeModeLabel()
   }
@@ -676,6 +700,9 @@ class OverlayManager(
 
   private fun pauseIcon(): Int =
     if (isPaused) R.drawable.ic_overlay_play else R.drawable.ic_overlay_pause
+
+  private fun modeIcon(): Int =
+    if (scrollMode == "auto") R.drawable.ic_overlay_gauge else R.drawable.ic_overlay_voice
 
   // ---------------------------------------------------------------------------
   // Highlighting / scroll
