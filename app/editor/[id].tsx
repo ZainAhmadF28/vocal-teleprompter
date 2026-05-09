@@ -1,162 +1,142 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
   TextInput,
   ScrollView,
   Pressable,
-  Modal,
   KeyboardAvoidingView,
   Platform,
+  PanResponder,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import {
   ChevronLeft,
-  Save,
-  TextCursorInput,
-  Gauge,
-  Languages,
-  Mic,
   Check,
+  Globe,
+  Mic,
+  SlidersHorizontal,
+  Maximize2,
+  Layers,
+  Video,
 } from 'lucide-react-native';
+import type { ScrollMode } from '@/store/settingsStore';
 import { useScriptsStore } from '@/store/scriptsStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { usePrompterStore } from '@/store/prompterStore';
-import { detectLanguageFromScript, getLanguageLabel } from '@/core/speech/LanguageDetector';
+import {
+  detectLanguageFromScript,
+  getLanguageLabel,
+} from '@/core/speech/LanguageDetector';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Screen } from '@/ui/components/Screen';
-import { Header } from '@/ui/components/Header';
-import { IconButton } from '@/ui/components/IconButton';
-import { Button } from '@/ui/components/Button';
 
-const SUPPORTED_LANGUAGES = [
-  { bcp47: 'id-ID', label: 'Indonesian' },
-  { bcp47: 'en-US', label: 'English' },
-  { bcp47: 'ja-JP', label: 'Japanese' },
-  { bcp47: 'ko-KR', label: 'Korean' },
-  { bcp47: 'zh-CN', label: 'Mandarin' },
+type DisplayMode = 'fullscreen' | 'floating' | 'camera';
+
+const DISPLAY_MODES: { id: DisplayMode; label: string; Icon: any }[] = [
+  { id: 'fullscreen', label: 'Fullscreen', Icon: Maximize2 },
+  { id: 'floating', label: 'Float', Icon: Layers },
+  { id: 'camera', label: 'Studio', Icon: Video },
 ];
 
-const FONT_SIZES = [32, 40, 48, 56, 64];
-const SPEED_PRESETS = [
-  { wpm: 100, label: 'Slow' },
-  { wpm: 140, label: 'Normal' },
-  { wpm: 180, label: 'Fast' },
-];
-
-function ToolbarButton({
-  icon,
-  label,
-  onPress,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onPress: () => void;
-}) {
-  const { colors, typography, spacing } = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        {
-          flex: 1,
-          alignItems: 'center',
-          gap: spacing.xs,
-          paddingVertical: spacing.md,
-          opacity: pressed ? 0.6 : 1,
-        },
-      ]}
-    >
-      {icon}
-      <Text style={[typography.caption, { color: colors.textSecondary }]}>{label}</Text>
-    </Pressable>
-  );
+function formatRelativeSeconds(ms: number): string {
+  if (ms < 0) return 'just now';
+  const s = Math.floor(ms / 1000);
+  if (s < 5) return 'just now';
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return `${h}h ago`;
 }
 
-function PickerModal({
-  visible,
-  title,
-  options,
-  selectedValue,
-  onSelect,
-  onClose,
+function Slider({
+  value,
+  min,
+  max,
+  step,
+  onChange,
 }: {
-  visible: boolean;
-  title: string;
-  options: { value: string | number; label: string; sub?: string }[];
-  selectedValue: string | number;
-  onSelect: (v: any) => void;
-  onClose: () => void;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
 }) {
-  const { colors, typography, spacing, radius } = useTheme();
+  const { colors } = useTheme();
+  const widthRef = useRef(0);
+  const stateRef = useRef({ min, max, step, onChange });
+  stateRef.current = { min, max, step, onChange };
+
+  const update = (x: number) => {
+    const w = widthRef.current;
+    if (w <= 0) return;
+    const { min, max, step, onChange } = stateRef.current;
+    const ratio = Math.max(0, Math.min(1, x / w));
+    const raw = min + ratio * (max - min);
+    const stepped = Math.round(raw / step) * step;
+    onChange(Math.max(min, Math.min(max, stepped)));
+  };
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (e) => update(e.nativeEvent.locationX),
+        onPanResponderMove: (e) => update(e.nativeEvent.locationX),
+      }),
+    []
+  );
+
+  const pct = max === min ? 0 : (value - min) / (max - min);
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
-        onPress={onClose}
+    <View
+      onLayout={(e: LayoutChangeEvent) => {
+        widthRef.current = e.nativeEvent.layout.width;
+      }}
+      style={{ height: 28, justifyContent: 'center' }}
+      hitSlop={{ top: 12, bottom: 12 }}
+      {...panResponder.panHandlers}
+    >
+      <View
+        style={{
+          height: 4,
+          borderRadius: 2,
+          backgroundColor: colors.bgSubtle,
+          overflow: 'hidden',
+        }}
       >
-        <Pressable
+        <View
           style={{
-            backgroundColor: colors.bgElevated,
-            borderTopLeftRadius: radius.xl,
-            borderTopRightRadius: radius.xl,
-            padding: spacing.lg,
-            paddingBottom: spacing.xxl,
-            gap: spacing.md,
-            borderTopWidth: 1,
-            borderColor: colors.border,
+            width: `${Math.round(pct * 100)}%`,
+            height: '100%',
+            backgroundColor: colors.text,
           }}
-          onPress={(e) => e.stopPropagation()}
-        >
-          {/* Drag handle */}
-          <View
-            style={{
-              width: 40,
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: colors.border,
-              alignSelf: 'center',
-            }}
-          />
-          <Text style={[typography.h2, { color: colors.text }]}>{title}</Text>
-          <View style={{ gap: spacing.xs }}>
-            {options.map((opt) => {
-              const active = opt.value === selectedValue;
-              return (
-                <Pressable
-                  key={String(opt.value)}
-                  onPress={() => {
-                    onSelect(opt.value);
-                    onClose();
-                  }}
-                  style={({ pressed }) => [
-                    {
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      paddingHorizontal: spacing.md,
-                      paddingVertical: spacing.md,
-                      borderRadius: radius.md,
-                      backgroundColor: pressed ? colors.bgSubtle : 'transparent',
-                    },
-                  ]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={[typography.body, { color: colors.text }]}>{opt.label}</Text>
-                    {opt.sub && (
-                      <Text style={[typography.caption, { color: colors.textSecondary }]}>
-                        {opt.sub}
-                      </Text>
-                    )}
-                  </View>
-                  {active && <Check size={20} color={colors.accent} strokeWidth={2} />}
-                </Pressable>
-              );
-            })}
-          </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
+        />
+      </View>
+      <View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          left: `${Math.round(pct * 100)}%`,
+          marginLeft: -10,
+          width: 20,
+          height: 20,
+          borderRadius: 10,
+          backgroundColor: '#FFFFFF',
+          borderWidth: 1,
+          borderColor: colors.border,
+          shadowColor: '#000',
+          shadowOpacity: 0.08,
+          shadowRadius: 4,
+          shadowOffset: { width: 0, height: 1 },
+          elevation: 2,
+        }}
+      />
+    </View>
   );
 }
 
@@ -164,6 +144,7 @@ export default function EditorScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { colors, typography, spacing, radius } = useTheme();
 
+  const scripts = useScriptsStore((s) => s.scripts);
   const getScript = useScriptsStore((s) => s.getScript);
   const updateScript = useScriptsStore((s) => s.updateScript);
   const settings = useSettingsStore();
@@ -175,20 +156,44 @@ export default function EditorScreen() {
   const [title, setTitle] = useState(script?.title ?? '');
   const [content, setContent] = useState(script?.content ?? '');
   const [language, setLanguage] = useState(script?.language ?? 'id-ID');
-  const [fontSize, setFontSize] = useState(settings.defaultFontSize);
-  const [wpm, setWpm] = useState(settings.scrollWPM);
+  const [confidence, setConfidence] = useState(0.98);
 
-  const [openPicker, setOpenPicker] = useState<null | 'size' | 'speed' | 'lang'>(null);
+  const [fontSize, setFontSize] = useState(settings.defaultFontSize);
+  const [sensitivity, setSensitivity] = useState<'low' | 'medium' | 'high'>(
+    settings.defaultSensitivity
+  );
+  const [wpm, setWpm] = useState(settings.scrollWPM);
+  const [scrollMode, setScrollModeLocal] = useState<ScrollMode>(
+    settings.scrollMode
+  );
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('fullscreen');
+
+  const [lastSavedAt, setLastSavedAt] = useState<number>(
+    script?.updatedAt ?? Date.now()
+  );
+  const [, setTick] = useState(0);
+
+  const scriptIndex = useMemo(() => {
+    const idx = scripts.findIndex((s) => s.id === id);
+    return idx >= 0 ? idx + 1 : scripts.length + 1;
+  }, [scripts, id]);
+
+  // Tick clock so "Auto-saved · Xs ago" updates
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   // Auto language detect
   useEffect(() => {
     if (content.length > 30) {
-      const { lang } = detectLanguageFromScript(content);
+      const { lang, confidence } = detectLanguageFromScript(content);
       setLanguage(lang);
+      setConfidence(confidence);
     }
   }, [content]);
 
-  // Autosave
+  // Autosave (debounced)
   useEffect(() => {
     if (!script) return;
     const timer = setTimeout(() => {
@@ -198,189 +203,489 @@ export default function EditorScreen() {
         title,
         content,
         language,
-        estimatedDurationSec: Math.round(words / wps),
+        estimatedDurationSec: Math.round(words / Math.max(0.0001, wps)),
       });
+      setLastSavedAt(Date.now());
     }, 500);
     return () => clearTimeout(timer);
   }, [title, content, language, wpm, id, script, updateScript]);
 
-  const wordsCount = useMemo(
-    () => content.trim().split(/\s+/).filter(Boolean).length,
-    [content]
-  );
-
-  const handleStartPrompter = () => {
-    setDetectedLanguage(language);
-    setActiveScript(id);
-    router.push(`/preflight/${id}` as any);
-  };
-
-  const handleSave = () => {
-    updateScript(id, { title, content, language });
-    router.back();
-  };
-
   if (!script) {
     return (
       <Screen>
-        <Header
-          title="Editor"
-          left={
-            <IconButton
-              icon={<ChevronLeft size={22} color={colors.text} strokeWidth={1.75} />}
-              onPress={() => router.back()}
-            />
-          }
-        />
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingHorizontal: spacing.lg,
+            paddingVertical: spacing.md,
+          }}
+        >
+          <Pressable
+            onPress={() => router.back()}
+            style={({ pressed }) => [
+              roundButtonStyle(colors, radius, false),
+              { opacity: pressed ? 0.7 : 1 },
+            ]}
+          >
+            <ChevronLeft size={20} color={colors.text} strokeWidth={2} />
+          </Pressable>
+        </View>
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <Text style={[typography.body, { color: colors.danger }]}>Script tidak ditemukan.</Text>
+          <Text style={[typography.body, { color: colors.danger }]}>
+            Script tidak ditemukan.
+          </Text>
         </View>
       </Screen>
     );
   }
 
+  const handleLaunch = () => {
+    setDetectedLanguage(language);
+    setActiveScript(id);
+    settings.setDefaultFontSize(fontSize);
+    settings.setDefaultSensitivity(sensitivity);
+    settings.setScrollMode(scrollMode);
+    settings.setScrollWPM(wpm);
+
+    const baselineWPS = wpm / 60;
+
+    if (displayMode === 'fullscreen') {
+      router.replace(
+        `/prompter/${id}?fontSize=${fontSize}&baselineWPS=${baselineWPS}` as any
+      );
+    } else if (displayMode === 'camera') {
+      router.replace(`/camera/${id}?fontSize=${fontSize}` as any);
+    } else {
+      router.replace('/overlay' as any);
+    }
+  };
+
+  const handleConfirm = () => {
+    updateScript(id, { title, content, language });
+    router.back();
+  };
+
+  const sensValue =
+    sensitivity === 'low' ? 0 : sensitivity === 'medium' ? 1 : 2;
+  const sensLabel =
+    sensitivity === 'low' ? 'Low' : sensitivity === 'medium' ? 'Medium' : 'High';
+
+  const sinceSave = formatRelativeSeconds(Date.now() - lastSavedAt);
+
   return (
     <Screen>
-      <Header
-        title="Edit Script"
-        left={
-          <IconButton
-            icon={<ChevronLeft size={22} color={colors.text} strokeWidth={1.75} />}
-            onPress={() => router.back()}
-          />
-        }
-        right={
-          <Pressable
-            onPress={handleSave}
-            style={({ pressed }) => [
-              {
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: spacing.xs,
-                backgroundColor: colors.accent,
-                paddingHorizontal: spacing.md,
-                paddingVertical: spacing.sm,
-                borderRadius: radius.md,
-                opacity: pressed ? 0.85 : 1,
-              },
-            ]}
-          >
-            <Save size={16} color={colors.textInverse} strokeWidth={1.75} />
-            <Text style={[typography.bodyEmph, { color: colors.textInverse }]}>Save</Text>
-          </Pressable>
-        }
-      />
-
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
+        {/* Header */}
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingHorizontal: spacing.lg,
+            paddingTop: spacing.sm,
+            paddingBottom: spacing.md,
+          }}
+        >
+          <Pressable
+            onPress={() => router.back()}
+            style={({ pressed }) => [
+              roundButtonStyle(colors, radius, false),
+              { opacity: pressed ? 0.7 : 1 },
+            ]}
+          >
+            <ChevronLeft size={20} color={colors.text} strokeWidth={2} />
+          </Pressable>
+
+          <Text
+            style={[typography.caption, { color: colors.textSecondary }]}
+            numberOfLines={1}
+          >
+            Auto-saved · {sinceSave}
+          </Text>
+
+          <Pressable
+            onPress={handleConfirm}
+            style={({ pressed }) => [
+              roundButtonStyle(colors, radius, true),
+              { opacity: pressed ? 0.85 : 1 },
+            ]}
+          >
+            <Check size={20} color={colors.textInverse} strokeWidth={2.25} />
+          </Pressable>
+        </View>
+
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg, paddingBottom: 120 }}
+          contentContainerStyle={{
+            paddingHorizontal: spacing.lg,
+            paddingBottom: 140,
+            gap: spacing.lg,
+          }}
           keyboardShouldPersistTaps="handled"
         >
+          {/* Script number */}
+          <Text
+            style={[
+              typography.micro,
+              { color: colors.textSecondary, marginTop: spacing.sm },
+            ]}
+          >
+            SCRIPT · {String(scriptIndex).padStart(2, '0')}
+          </Text>
+
+          {/* Title */}
           <TextInput
             value={title}
             onChangeText={setTitle}
             placeholder="Untitled Script"
             placeholderTextColor={colors.textTertiary}
-            style={[
-              typography.displayXL,
-              { color: colors.text, paddingVertical: spacing.sm, fontSize: 36, lineHeight: 42 },
-            ]}
-          />
-
-          <TextInput
-            value={content}
-            onChangeText={setContent}
-            placeholder="Start typing your script here..."
-            placeholderTextColor={colors.textTertiary}
             multiline
-            textAlignVertical="top"
-            style={[
-              typography.h2,
-              {
+            style={{
+              color: colors.text,
+              fontWeight: '800',
+              fontSize: 32,
+              lineHeight: 38,
+              letterSpacing: -0.6,
+              paddingVertical: 0,
+              marginTop: -spacing.sm,
+            }}
+          />
+
+          {/* Content card (editable) */}
+          <View
+            style={{
+              backgroundColor: colors.bgSubtle,
+              borderRadius: radius.lg,
+              padding: spacing.lg,
+              minHeight: 200,
+            }}
+          >
+            <TextInput
+              value={content}
+              onChangeText={setContent}
+              placeholder="Start typing your script here..."
+              placeholderTextColor={colors.textTertiary}
+              multiline
+              textAlignVertical="top"
+              style={{
                 color: colors.text,
+                fontSize: 16,
+                lineHeight: 24,
                 fontWeight: '400',
-                lineHeight: 28,
-                minHeight: 280,
-              },
-            ]}
-          />
+                minHeight: 168,
+                paddingVertical: 0,
+              }}
+            />
+          </View>
 
-          {wordsCount > 0 && (
-            <Text style={[typography.caption, { color: colors.textSecondary }]}>
-              {wordsCount} words · {getLanguageLabel(language)} · ~{Math.round(wordsCount / (wpm / 60))}s @ {wpm} wpm
+          {/* Language pill */}
+          <View style={{ flexDirection: 'row' }}>
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: spacing.sm,
+                backgroundColor: colors.bgSubtle,
+                paddingHorizontal: spacing.md,
+                paddingVertical: spacing.sm,
+                borderRadius: radius.pill,
+              }}
+            >
+              <Globe size={14} color={colors.textSecondary} strokeWidth={1.75} />
+              <Text style={[typography.caption, { color: colors.text }]}>
+                {getLanguageLabel(language)} · {Math.round(confidence * 100)}%
+              </Text>
+            </View>
+          </View>
+
+          {/* Font size slider */}
+          <View style={{ gap: spacing.sm, marginTop: spacing.sm }}>
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <Text style={[typography.body, { color: colors.text }]}>
+                Font size
+              </Text>
+              <Text
+                style={[
+                  typography.bodyEmph,
+                  { color: colors.text, fontWeight: '700' },
+                ]}
+              >
+                {fontSize} pt
+              </Text>
+            </View>
+            <Slider
+              value={fontSize}
+              min={24}
+              max={96}
+              step={4}
+              onChange={setFontSize}
+            />
+          </View>
+
+          {/* Sensitivity / Speed slider */}
+          <View style={{ gap: spacing.sm }}>
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <Text style={[typography.body, { color: colors.text }]}>
+                {scrollMode === 'voice' ? 'Sensitivity' : 'Speed'}
+              </Text>
+              <Text
+                style={[
+                  typography.bodyEmph,
+                  { color: colors.text, fontWeight: '700' },
+                ]}
+              >
+                {scrollMode === 'voice' ? sensLabel : `${wpm} WPM`}
+              </Text>
+            </View>
+            {scrollMode === 'voice' ? (
+              <Slider
+                value={sensValue}
+                min={0}
+                max={2}
+                step={1}
+                onChange={(v) =>
+                  setSensitivity(v <= 0 ? 'low' : v >= 2 ? 'high' : 'medium')
+                }
+              />
+            ) : (
+              <Slider
+                value={wpm}
+                min={60}
+                max={250}
+                step={10}
+                onChange={setWpm}
+              />
+            )}
+          </View>
+
+          {/* DRIVER */}
+          <View style={{ gap: spacing.md, marginTop: spacing.sm }}>
+            <Text style={[typography.micro, { color: colors.textSecondary }]}>
+              DRIVER
             </Text>
-          )}
+            <View style={{ flexDirection: 'row', gap: spacing.md }}>
+              <DriverCard
+                active={scrollMode === 'voice'}
+                title="Vocal"
+                subtitle="Scroll mengikuti suara"
+                Icon={Mic}
+                onPress={() => setScrollModeLocal('voice')}
+              />
+              <DriverCard
+                active={scrollMode === 'auto'}
+                title="Auto Scroll"
+                subtitle="Kecepatan tetap"
+                Icon={SlidersHorizontal}
+                onPress={() => setScrollModeLocal('auto')}
+              />
+            </View>
 
-          <Button
-            label="Continue to Pre-flight"
-            variant="primary"
-            fullWidth
-            leftIcon={<Mic size={18} color={colors.textInverse} strokeWidth={1.75} />}
-            onPress={handleStartPrompter}
-            disabled={!content.trim()}
-          />
+            {/* Display mode tabs (segmented) */}
+            <View
+              style={{
+                flexDirection: 'row',
+                backgroundColor: colors.bgSubtle,
+                borderRadius: radius.pill,
+                padding: 4,
+                marginTop: spacing.xs,
+              }}
+            >
+              {DISPLAY_MODES.map((m) => {
+                const active = displayMode === m.id;
+                const { Icon } = m;
+                return (
+                  <Pressable
+                    key={m.id}
+                    onPress={() => setDisplayMode(m.id)}
+                    style={({ pressed }) => [
+                      {
+                        flex: 1,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        paddingVertical: spacing.sm + 2,
+                        borderRadius: radius.pill,
+                        backgroundColor: active ? colors.bg : 'transparent',
+                        opacity: pressed ? 0.85 : 1,
+                      },
+                    ]}
+                  >
+                    <Icon
+                      size={14}
+                      color={active ? colors.text : colors.textSecondary}
+                      strokeWidth={1.75}
+                    />
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        fontWeight: active ? '700' : '500',
+                        color: active ? colors.text : colors.textSecondary,
+                        letterSpacing: -0.1,
+                      }}
+                    >
+                      {m.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
         </ScrollView>
 
-        {/* Bottom toolbar */}
+        {/* Floating bottom bar: Launch */}
         <View
           style={{
-            flexDirection: 'row',
-            backgroundColor: colors.bgElevated,
-            borderTopWidth: 1,
-            borderTopColor: colors.border,
-            paddingHorizontal: spacing.sm,
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            paddingHorizontal: spacing.lg,
+            paddingTop: spacing.md,
+            paddingBottom: spacing.lg,
+            backgroundColor: colors.bg,
           }}
         >
-          <ToolbarButton
-            icon={<TextCursorInput size={20} color={colors.text} strokeWidth={1.75} />}
-            label={`Size · ${fontSize}px`}
-            onPress={() => setOpenPicker('size')}
-          />
-          <ToolbarButton
-            icon={<Gauge size={20} color={colors.text} strokeWidth={1.75} />}
-            label={`Speed · ${wpm}wpm`}
-            onPress={() => setOpenPicker('speed')}
-          />
-          <ToolbarButton
-            icon={<Languages size={20} color={colors.text} strokeWidth={1.75} />}
-            label={`Lang · ${language === 'id-ID' ? 'ID' : language.split('-')[0].toUpperCase()}`}
-            onPress={() => setOpenPicker('lang')}
-          />
+          <Pressable
+            onPress={handleLaunch}
+            disabled={!content.trim()}
+            style={({ pressed }) => [
+              {
+                backgroundColor: colors.text,
+                borderRadius: radius.pill,
+                paddingVertical: spacing.md + 2,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: spacing.sm,
+                opacity: !content.trim() ? 0.4 : pressed ? 0.85 : 1,
+              },
+            ]}
+          >
+            <Mic size={18} color={colors.bg} strokeWidth={2} />
+            <Text
+              style={{
+                color: colors.bg,
+                fontSize: 17,
+                fontWeight: '700',
+                letterSpacing: -0.2,
+              }}
+            >
+              Launch
+            </Text>
+          </Pressable>
         </View>
       </KeyboardAvoidingView>
-
-      <PickerModal
-        visible={openPicker === 'size'}
-        title="Font Size"
-        options={FONT_SIZES.map((s) => ({ value: s, label: `${s}px` }))}
-        selectedValue={fontSize}
-        onSelect={(v) => setFontSize(v as number)}
-        onClose={() => setOpenPicker(null)}
-      />
-      <PickerModal
-        visible={openPicker === 'speed'}
-        title="Reading Speed"
-        options={SPEED_PRESETS.map((p) => ({
-          value: p.wpm,
-          label: p.label,
-          sub: `${p.wpm} words per minute`,
-        }))}
-        selectedValue={wpm}
-        onSelect={(v) => setWpm(v as number)}
-        onClose={() => setOpenPicker(null)}
-      />
-      <PickerModal
-        visible={openPicker === 'lang'}
-        title="Language"
-        options={SUPPORTED_LANGUAGES.map((l) => ({ value: l.bcp47, label: l.label }))}
-        selectedValue={language}
-        onSelect={(v) => setLanguage(v as string)}
-        onClose={() => setOpenPicker(null)}
-      />
     </Screen>
   );
+}
+
+function DriverCard({
+  active,
+  title,
+  subtitle,
+  Icon,
+  onPress,
+}: {
+  active: boolean;
+  title: string;
+  subtitle: string;
+  Icon: any;
+  onPress: () => void;
+}) {
+  const { colors, typography, spacing, radius, resolvedScheme } = useTheme();
+  const NEON = '#D4F542';
+  const DARK = '#0A0A0F';
+
+  const bg = active ? DARK : colors.bgSubtle;
+  const fg = active ? '#FAFAFA' : colors.text;
+  const sub = active ? '#A1A1AA' : colors.textSecondary;
+
+  const inactiveIconBg = resolvedScheme === 'dark' ? colors.bgElevated : '#FFFFFF';
+  const inactiveIconColor = colors.text;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        {
+          flex: 1,
+          backgroundColor: bg,
+          borderRadius: radius.lg,
+          padding: spacing.md,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: spacing.md,
+          opacity: pressed ? 0.9 : 1,
+        },
+      ]}
+    >
+      <View
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 18,
+          backgroundColor: active ? DARK : inactiveIconBg,
+          borderWidth: active ? 1.5 : 0,
+          borderColor: active ? NEON : 'transparent',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Icon
+          size={18}
+          color={active ? NEON : inactiveIconColor}
+          strokeWidth={2}
+        />
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text
+          style={[
+            typography.bodyEmph,
+            { color: fg, fontWeight: '700' },
+          ]}
+          numberOfLines={1}
+        >
+          {title}
+        </Text>
+        <Text
+          style={[typography.caption, { color: sub }]}
+          numberOfLines={2}
+        >
+          {subtitle}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function roundButtonStyle(
+  colors: ReturnType<typeof useTheme>['colors'],
+  radius: ReturnType<typeof useTheme>['radius'],
+  filled: boolean
+) {
+  return {
+    width: 44,
+    height: 44,
+    borderRadius: radius.pill,
+    backgroundColor: filled ? colors.text : colors.bgSubtle,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  };
 }
